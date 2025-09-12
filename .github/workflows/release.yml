@@ -1,0 +1,90 @@
+name: Release Extension
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+      
+      - name: Build extension
+        working-directory: extension
+        run: npm run build
+      
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+      
+      - name: Create release archive
+        run: |
+          cd extension/dist
+          zip -r ../../animestars-kodik-optimizer-v${{ steps.get_version.outputs.VERSION }}.zip ./*
+      
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          if [ -f CHANGELOG.md ]; then
+            # Извлекаем заметки для текущей версии из CHANGELOG.md
+            awk '/^## \['"${{ steps.get_version.outputs.VERSION }}"'\]/{flag=1;next}/^## \[/{flag=0}flag' CHANGELOG.md > release_notes.txt
+            echo "notes<<EOF" >> $GITHUB_OUTPUT
+            cat release_notes.txt >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "notes=Release v${{ steps.get_version.outputs.VERSION }}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.get_version.outputs.VERSION }}
+          release_name: AnimeStars Kodik Optimizer v${{ steps.get_version.outputs.VERSION }}
+          body: |
+            ## 🚀 AnimeStars Kodik Optimizer v${{ steps.get_version.outputs.VERSION }}
+            
+            ${{ steps.release_notes.outputs.notes }}
+            
+            ## 📦 Установка
+            1. Скачайте `animestars-kodik-optimizer-v${{ steps.get_version.outputs.VERSION }}.zip`
+            2. Распакуйте архив
+            3. Откройте Chrome → Управление расширениями
+            4. Включите "Режим разработчика"
+            5. Нажмите "Загрузить распакованное расширение"
+            6. Выберите папку с распакованным расширением
+            
+            ## 🎯 Совместимость
+            - Chrome 88+
+            - Microsoft Edge 88+
+            - Другие Chromium-браузеры
+          draft: false
+          prerelease: false
+      
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./animestars-kodik-optimizer-v${{ steps.get_version.outputs.VERSION }}.zip
+          asset_name: animestars-kodik-optimizer-v${{ steps.get_version.outputs.VERSION }}.zip
+          asset_content_type: application/zip

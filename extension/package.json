@@ -1,0 +1,41 @@
+{
+  "name": "animestars-kodik-fast-player",
+  "version": "1.0.0",
+  "description": "Fast Kodik player replacement for animestars.org with optimized video streaming",
+  "main": "dist/content.js",
+  "scripts": {
+    "build": "npm run clean && npm run compile && npm run webpack:prod",
+    "build:dev": "npm run clean && npm run compile && npm run webpack:dev",
+    "dev": "npm run webpack:watch",
+    "clean": "rimraf dist",
+    "compile": "tsc",
+    "webpack:prod": "webpack --mode=production",
+    "webpack:dev": "webpack --mode=development",
+    "webpack:watch": "webpack --mode=development --watch",
+    "package": "npm run build && npm run zip",
+    "zip": "cd dist && powershell Compress-Archive -Path * -DestinationPath ../animestars-kodik-extension.zip -Force"
+  },
+  "keywords": [
+    "chrome-extension",
+    "anime",
+    "kodik",
+    "video-player",
+    "animestars"
+  ],
+  "author": "Wholumulu",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chrome": "^0.0.246",
+    "@types/node": "^20.0.0",
+    "clean-webpack-plugin": "^4.0.0",
+    "copy-webpack-plugin": "^11.0.0",
+    "rimraf": "^6.0.1",
+    "ts-loader": "^9.0.0",
+    "typescript": "^5.0.0",
+    "webpack": "^5.0.0",
+    "webpack-cli": "^5.0.0"
+  },
+  "dependencies": {
+    "hls.js": "^1.4.0"
+  }
+}

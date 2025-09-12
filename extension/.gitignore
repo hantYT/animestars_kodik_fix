@@ -1,0 +1,38 @@
+# Build outputs
+dist/
+build/
+out/
+
+# TypeScript compilation
+*.tsbuildinfo
+*.d.ts.map
+
+# Development builds
+dev-build/
+debug/
+
+# Webpack specific
+.webpack/
+webpack-stats.json
+
+# Source maps (uncomment if you don't want to track them)
+# *.map
+
+# Extension packages
+*.crx
+*.zip
+
+# Chrome extension development
+Certificates/
+private-key.pem
+
+# Hot reload and development
+hot-reload/
+dev-server/
+
+# Testing
+coverage/
+test-results/
+
+# Temporary webpack files
+.cache-loader/

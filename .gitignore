@@ -1,0 +1,130 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+release-build.log
+build-*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage
+*.lcov
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# TypeScript cache
+*.tsbuildinfo
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Build outputs
+dist/
+build/
+out/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Extension specific
+*.crx
+*.pem
+
+# Release files and temporary build artifacts
+releases/*.zip
+release_notes.txt
+animestars-kodik-optimizer-*.zip
+
+# Temporary files
+*.tmp
+*.temp
+
+# Cache
+.cache/
+.parcel-cache/
+
+# webpack bundle analyzer
+bundle-analyzer-report.html
+
+# Storybook build outputs
+storybook-static
+
+# Temporary folders
+tmp/
+temp/
+
+# Release and deployment
+releases/*.zip
+release_notes.txt
+deploy/
+scripts/temp/
+scripts/build-temp/
+
+# Package manager lockfiles (keep only one)
+package-lock.json
+yarn.lock
+
+# Runtime and process files
+*.pid
+*.seed
+*.pid.lock
+
+# Archive files (except source archives)
+*.tar.gz
+*.rar
+*.7z
+
+# Development and test files
+test-results/
+coverage-reports/
+benchmark-results/
+
+# VS Code workspace settings (keep shared settings)
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json

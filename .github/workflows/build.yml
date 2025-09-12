@@ -1,0 +1,80 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build Extension
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+      
+      - name: Build extension
+        working-directory: extension
+        run: npm run build
+      
+      - name: Check build output
+        run: |
+          if [ ! -d "extension/dist" ]; then
+            echo "❌ Build failed: dist directory not found"
+            exit 1
+          fi
+          
+          if [ ! -f "extension/dist/manifest.json" ]; then
+            echo "❌ Build failed: manifest.json not found"
+            exit 1
+          fi
+          
+          if [ ! -f "extension/dist/content-script.js" ]; then
+            echo "❌ Build failed: content-script.js not found"
+            exit 1
+          fi
+          
+          echo "✅ Build successful"
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: extension-build
+          path: extension/dist/
+          retention-days: 30
+  
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+      
+      - name: Install dependencies
+        working-directory: extension
+        run: npm ci
+      
+      - name: Run TypeScript compiler
+        working-directory: extension
+        run: npm run compile
