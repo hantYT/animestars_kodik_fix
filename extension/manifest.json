@@ -1,15 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AnimeStars Kodik Fast Player",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Replace slow Kodik player with fast optimized video streaming on animestars.org",
-  
   "permissions": [
     "activeTab",
     "storage",
     "declarativeNetRequest"
   ],
-  
   "host_permissions": [
     "*://animestars.org/*",
     "*://asstars.tv/*",
@@ -18,33 +16,42 @@
     "*://kodik-add.com/*",
     "*://cloud.kodik-storage.com/*"
   ],
-  
   "content_scripts": [
     {
-      "matches": ["*://animestars.org/*", "*://asstars.tv/*"],
-      "js": ["hls.min.js", "content-script.js"],
-      "css": ["player.css"],
+      "matches": [
+        "*://animestars.org/*",
+        "*://asstars.tv/*"
+      ],
+      "js": [
+        "hls.min.js",
+        "content-script.js"
+      ],
+      "css": [
+        "player.css"
+      ],
       "run_at": "document_end"
     }
   ],
-  
   "background": {
     "service_worker": "background.js"
   },
-  
   "web_accessible_resources": [
     {
-      "resources": ["player.css", "hls.min.js"],
-      "matches": ["*://animestars.org/*", "*://asstars.tv/*"]
+      "resources": [
+        "player.css",
+        "hls.min.js"
+      ],
+      "matches": [
+        "*://animestars.org/*",
+        "*://asstars.tv/*"
+      ]
     }
   ],
-  
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  
   "action": {
     "default_popup": "popup.html",
     "default_title": "Kodik Fast Player Settings"

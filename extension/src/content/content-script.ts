@@ -40,6 +40,8 @@ class AnimeStarsKodikOptimizer {
   private bufferedBar: HTMLElement | null = null;
   private isControlsVisible: boolean = true;
   private controlsHideTimeout: number | null = null;
+  private fullscreenClickHandler: ((e: MouseEvent) => void) | null = null;
+  private fullscreenMouseMoveHandler: (() => void) | null = null;
 
   /**
    * Инициализация оптимизатора
@@ -665,7 +667,11 @@ class AnimeStarsKodikOptimizer {
       centerButton.style.transform = 'translate(-50%, -50%) scale(1.1)';
     });
 
-    centerButton.addEventListener('click', () => {
+    centerButton.addEventListener('click', (e) => {
+      console.log('🎬 Center play button clicked - event target:', e.target);
+      console.log('🎬 Video element paused state:', this.videoElement?.paused);
+      e.stopPropagation(); // Предотвращаем всплытие события
+      e.preventDefault(); // Предотвращаем действие по умолчанию
       this.togglePlayPause();
     });
 
@@ -920,6 +926,7 @@ class AnimeStarsKodikOptimizer {
 
     this.videoElement.addEventListener('playing', () => {
       this.hideLoading();
+      this.hideCenterPlayButton();
       this.updatePlayButton(false);
     });
 
@@ -950,7 +957,17 @@ class AnimeStarsKodikOptimizer {
    */
   private setupKeyboardControls() {
     document.addEventListener('keydown', (e) => {
-      if (!this.videoElement || document.activeElement?.tagName === 'INPUT') return;
+      // Проверяем что видео элемент существует и активен
+      if (!this.videoElement) return;
+      
+      // Игнорируем события если фокус на input элементах (кроме полноэкранного режима)
+      if (document.activeElement?.tagName === 'INPUT' && !document.fullscreenElement) return;
+      
+      // Проверяем что плеер активен (видимый контейнер или полноэкранный режим)
+      const isPlayerActive = document.fullscreenElement || 
+                           this.playerContainer?.offsetParent !== null;
+      
+      if (!isPlayerActive) return;
 
       switch (e.code) {
         case 'Space':
@@ -981,6 +998,13 @@ class AnimeStarsKodikOptimizer {
           e.preventDefault();
           this.toggleMute();
           break;
+        case 'Escape':
+          // Выход из полноэкранного режима
+          if (document.fullscreenElement) {
+            e.preventDefault();
+            document.exitFullscreen();
+          }
+          break;
       }
     });
   }
@@ -991,13 +1015,26 @@ class AnimeStarsKodikOptimizer {
   private setupMouseControls(container: HTMLElement) {
     let isMouseMoving = false;
 
-    container.addEventListener('click', (e) => {
-      if (e.target === this.videoElement || e.target === container) {
+    // Обработчик кликов для обычного и полноэкранного режима
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      
+      // Не обрабатываем клики по кнопкам, input и контролам
+      if (target.closest('button') || 
+          target.closest('input') || 
+          target.closest('.custom-controls')) {
+        return;
+      }
+      
+      // Обрабатываем клики по видео или контейнеру
+      if (target === this.videoElement || target === container || 
+          target.closest('.video-container') === container) {
         this.togglePlayPause();
       }
-    });
+    };
 
-    container.addEventListener('mousemove', () => {
+    // Обработчик движения мыши
+    const handleMouseMove = () => {
       this.showControls();
       isMouseMoving = true;
       
@@ -1009,10 +1046,42 @@ class AnimeStarsKodikOptimizer {
         if (!isMouseMoving) this.hideControls();
         isMouseMoving = false;
       }, 3000);
-    });
+    };
+
+    // Привязываем к контейнеру
+    container.addEventListener('click', handleClick);
+    container.addEventListener('mousemove', handleMouseMove);
 
     container.addEventListener('mouseleave', () => {
       this.hideControls();
+    });
+
+    // Сохраняем ссылки на обработчики для правильного удаления
+    this.fullscreenClickHandler = handleClick;
+    this.fullscreenMouseMoveHandler = handleMouseMove;
+
+    // Дополнительно привязываем к document для полноэкранного режима
+    document.addEventListener('fullscreenchange', () => {
+      if (document.fullscreenElement) {
+        // Вошли в полноэкранный режим
+        if (this.fullscreenClickHandler) {
+          document.addEventListener('click', this.fullscreenClickHandler);
+        }
+        if (this.fullscreenMouseMoveHandler) {
+          document.addEventListener('mousemove', this.fullscreenMouseMoveHandler);
+        }
+        console.log('🔍 Fullscreen mode enabled - global controls active');
+      } else {
+        // Вышли из полноэкранного режима
+        if (this.fullscreenClickHandler) {
+          document.removeEventListener('click', this.fullscreenClickHandler);
+        }
+        if (this.fullscreenMouseMoveHandler) {
+          document.removeEventListener('mousemove', this.fullscreenMouseMoveHandler);
+        }
+        this.showControls(); // Показываем контролы при выходе из полноэкранного режима
+        console.log('🔍 Fullscreen mode disabled - local controls only');
+      }
     });
   }
 
@@ -1020,11 +1089,18 @@ class AnimeStarsKodikOptimizer {
    * Переключает воспроизведение/паузу
    */
   private togglePlayPause() {
-    if (!this.videoElement) return;
+    console.log('🎵 togglePlayPause called, video element:', !!this.videoElement);
+    if (!this.videoElement) {
+      console.log('❌ No video element found');
+      return;
+    }
 
+    console.log('🎵 Current paused state:', this.videoElement.paused);
     if (this.videoElement.paused) {
+      console.log('▶️ Playing video');
       this.videoElement.play();
     } else {
+      console.log('⏸️ Pausing video');
       this.videoElement.pause();
     }
   }

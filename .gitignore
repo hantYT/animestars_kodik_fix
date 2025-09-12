@@ -5,7 +5,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
-release-build.log
+release-bui# Release and deployment
+releases/*.zip
+release_notes.txt
+deploy/
+scripts/
+scripts/temp/
+scripts/build-temp/
 build-*.log
 
 # Runtime data
