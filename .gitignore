@@ -105,6 +105,12 @@ deploy/
 scripts/temp/
 scripts/build-temp/
 
+# Development helper scripts (keep in local only)
+build-release.bat
+build-release.sh
+GIT_IGNORE_INFO.md
+package.json
+
 # Package manager lockfiles (keep only one)
 package-lock.json
 yarn.lock
