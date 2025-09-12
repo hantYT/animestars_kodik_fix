@@ -109,6 +109,9 @@ scripts/build-temp/
 package-lock.json
 yarn.lock
 
+# Root package.json (only for release scripts)
+package.json
+
 # Runtime and process files
 *.pid
 *.seed
