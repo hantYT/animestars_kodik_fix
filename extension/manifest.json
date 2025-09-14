@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AnimeStars Kodik Fast Player",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Replace slow Kodik player with fast optimized video streaming on animestars.org",
   "permissions": [
     "activeTab",

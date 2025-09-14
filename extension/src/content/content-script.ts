@@ -2,6 +2,9 @@
 // Парсит переводы, удаляет оригинальный плеер, создает свой HLS плеер
 
 import { kodikAPI } from '../api/kodik-client';
+import { ProgressManager } from '../utils/progress-manager';
+import { AnimeParser } from '../utils/anime-parser';
+import { AnimeInfo } from '../types/progress';
 
 // Declare HLS.js types
 declare global {
@@ -42,6 +45,11 @@ class AnimeStarsKodikOptimizer {
   private controlsHideTimeout: number | null = null;
   private fullscreenClickHandler: ((e: MouseEvent) => void) | null = null;
   private fullscreenMouseMoveHandler: (() => void) | null = null;
+  
+  // Новые поля для работы с прогрессом
+  private currentAnimeInfo: AnimeInfo | null = null;
+  private isProgressSystemActive: boolean = false;
+  private isFirstLoad: boolean = true; // Флаг первой загрузки
 
   /**
    * Инициализация оптимизатора
@@ -104,16 +112,65 @@ class AnimeStarsKodikOptimizer {
         return;
       }
 
-      // 2. Удаляем оригинальный плеер
+      // 2. Извлекаем информацию об аниме
+      this.extractAnimeInfo();
+
+      // 3. Удаляем оригинальный плеер
       this.removeOriginalPlayer();
 
-      // 3. Создаем свой плеер
+      // 4. Создаем свой плеер
       await this.createCustomPlayer();
 
       console.log('✅ AnimeStars Kodik Optimizer initialized successfully');
     } catch (error) {
       console.error('❌ Failed to initialize optimizer:', error);
     }
+  }
+
+  /**
+   * Извлекает информацию об аниме из существующих данных на странице
+   */
+  private extractAnimeInfo() {
+    console.log('🔍 Extracting anime info from page data...');
+    
+    if (!this.currentTranslation) {
+      console.warn('⚠️ No current translation available');
+      return;
+    }
+
+    // Используем mediaId как ID аниме (это уникальный идентификатор от Kodik)
+    const animeId = this.currentTranslation.mediaId;
+    
+    // Извлекаем название из заголовка страницы или мета-данных
+    let title = document.title;
+    
+    // Очищаем название от лишнего
+    title = title
+      .replace(/\s*-\s*смотреть.*$/i, '')
+      .replace(/\s*-\s*аниме.*$/i, '')
+      .replace(/\s*\|\s*.*$/i, '')
+      .replace(/\s*\(\d{4}\).*$/, '')
+      .trim();
+
+    // Альтернативные источники названия
+    if (!title || title.length < 3) {
+      const titleElement = document.querySelector('h1, .anime-title, .title');
+      if (titleElement) {
+        title = titleElement.textContent?.trim() || 'Unknown Anime';
+      }
+    }
+
+    this.currentAnimeInfo = {
+      id: animeId,
+      title: title || 'Unknown Anime',
+      currentEpisode: this.currentEpisode,
+      totalEpisodes: this.episodes.length > 0 ? this.episodes.length : undefined,
+      translationId: this.currentTranslation.translationId,
+      url: window.location.href
+    };
+
+    console.log('📺 Extracted anime info:', this.currentAnimeInfo);
+    this.isProgressSystemActive = true;
   }
 
   /**
@@ -516,7 +573,9 @@ class AnimeStarsKodikOptimizer {
     `;
     this.videoElement.controls = false;
     this.videoElement.preload = 'metadata';
-    this.videoElement.poster = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iODAwIiBoZWlnaHQ9IjQ1MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImEiIHgxPSIwJSIgeTE9IjAlIiB4Mj0iMTAwJSIgeTI9IjEwMCUiPjxzdG9wIG9mZnNldD0iMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiMyMzIzMjMiLz48c3RvcCBvZmZzZXQ9IjEwMCUiIHN0eWxlPSJzdG9wLWNvbG9yOiMxMTExMTEiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSJ1cmwoI2EpIi8+PC9zdmc+';
+    
+    // Создаем красивый poster с информацией об аниме
+    await this.createVideoPoster();
 
     // Создаем индикатор загрузки
     this.createLoadingIndicator(playerWrapper);
@@ -539,6 +598,255 @@ class AnimeStarsKodikOptimizer {
 
     // Загружаем видео для текущего эпизода
     await this.loadVideo();
+  }
+
+  /**
+   * Создает красивый poster для видео с информацией об аниме
+   */
+  private async createVideoPoster() {
+    if (!this.videoElement || !this.currentAnimeInfo) {
+      // Используем базовый градиентный poster
+      this.videoElement!.poster = this.createDefaultPoster();
+      return;
+    }
+
+    try {
+      // Пробуем получить реальное превью от Kodik
+      const kodikPoster = await this.tryGetKodikPoster();
+      
+      if (kodikPoster) {
+        this.videoElement.poster = kodikPoster;
+        console.log('✅ Using Kodik poster');
+        return;
+      }
+    } catch (error) {
+      console.log('⚠️ Could not get Kodik poster, using custom poster');
+    }
+
+    // Создаем кастомный poster с информацией об аниме
+    const customPoster = await this.createCustomPoster();
+    this.videoElement.poster = customPoster;
+  }
+
+  /**
+   * Пытается получить реальное превью от Kodik
+   */
+  private async tryGetKodikPoster(): Promise<string | null> {
+    if (!this.currentTranslation) return null;
+
+    try {
+      // Пробуем найти превью в данных Kodik
+      const episodeUrl = `https://kodik.info/serial/${this.currentTranslation.mediaId}/${this.currentTranslation.mediaHash}/720p?min_age=16&first_url=false&season=1&episode=${this.currentEpisode}`;
+      
+      const response = await this.fetchViaBackground(episodeUrl);
+      if (!response.success || !response.data) return null;
+
+      const html = response.data;
+      
+      // Ищем poster в HTML
+      const posterPatterns = [
+        /poster['"]\s*:\s*['"]([^'"]+)['"]/i,
+        /data-poster['"]\s*=\s*['"]([^'"]+)['"]/i,
+        /<video[^>]+poster\s*=\s*['"]([^'"]+)['"]/i,
+        /preview['"]\s*:\s*['"]([^'"]+)['"]/i,
+        /thumbnail['"]\s*:\s*['"]([^'"]+)['"]/i
+      ];
+
+      for (const pattern of posterPatterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+          let posterUrl = match[1];
+          
+          // Проверяем что URL валидный
+          if (posterUrl.startsWith('http')) {
+            return posterUrl;
+          } else if (posterUrl.startsWith('/')) {
+            return `https://kodik.info${posterUrl}`;
+          }
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.log('❌ Error getting Kodik poster:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Создает кастомный poster с информацией об аниме
+   */
+  private async createCustomPoster(): Promise<string> {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 450;
+    const ctx = canvas.getContext('2d')!;
+
+    // Создаем градиентный фон
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, '#1a1a2e');
+    gradient.addColorStop(0.5, '#16213e');
+    gradient.addColorStop(1, '#0f3460');
+    
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Добавляем паттерн
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+    for (let i = 0; i < 50; i++) {
+      const x = Math.random() * canvas.width;
+      const y = Math.random() * canvas.height;
+      const size = Math.random() * 3 + 1;
+      ctx.fillRect(x, y, size, size);
+    }
+
+    // Центральная иконка воспроизведения
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const iconSize = 80;
+
+    // Тень для иконки
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+    ctx.beginPath();
+    ctx.arc(centerX + 3, centerY + 3, iconSize / 2, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Фон иконки
+    ctx.fillStyle = 'rgba(0, 212, 255, 0.2)';
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, iconSize / 2, 0, 2 * Math.PI);
+    ctx.fill();
+
+    // Обводка иконки
+    ctx.strokeStyle = 'rgba(0, 212, 255, 0.8)';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, iconSize / 2, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Треугольник воспроизведения
+    ctx.fillStyle = '#00d4ff';
+    ctx.beginPath();
+    ctx.moveTo(centerX - 15, centerY - 20);
+    ctx.lineTo(centerX - 15, centerY + 20);
+    ctx.lineTo(centerX + 20, centerY);
+    ctx.closePath();
+    ctx.fill();
+
+    // Название аниме
+    if (this.currentAnimeInfo?.title) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 32px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      
+      // Тень для текста
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+      ctx.fillText(this.currentAnimeInfo.title, centerX + 2, centerY - 82);
+      
+      // Основной текст
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(this.currentAnimeInfo.title, centerX, centerY - 80);
+    }
+
+    // Информация о серии и переводе
+    const episodeText = `Серия ${this.currentEpisode}`;
+    const translationText = this.currentTranslation?.title || 'Озвучка';
+    
+    ctx.font = '20px -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+    
+    // Тень
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillText(episodeText, centerX + 1, centerY + 101);
+    ctx.fillText(translationText, centerX + 1, centerY + 131);
+    
+    // Основной текст
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.fillText(episodeText, centerX, centerY + 100);
+    
+    ctx.fillStyle = 'rgba(0, 212, 255, 0.9)';
+    ctx.fillText(translationText, centerX, centerY + 130);
+
+    // Декоративные элементы по углам
+    this.drawCornerDecorations(ctx, canvas.width, canvas.height);
+
+    return canvas.toDataURL('image/png', 0.9);
+  }
+
+  /**
+   * Рисует декоративные элементы по углам poster'а
+   */
+  private drawCornerDecorations(ctx: CanvasRenderingContext2D, width: number, height: number) {
+    const cornerSize = 40;
+    const lineWidth = 3;
+    
+    ctx.strokeStyle = 'rgba(0, 212, 255, 0.4)';
+    ctx.lineWidth = lineWidth;
+    
+    // Верхний левый угол
+    ctx.beginPath();
+    ctx.moveTo(20, 20 + cornerSize);
+    ctx.lineTo(20, 20);
+    ctx.lineTo(20 + cornerSize, 20);
+    ctx.stroke();
+    
+    // Верхний правый угол
+    ctx.beginPath();
+    ctx.moveTo(width - 20 - cornerSize, 20);
+    ctx.lineTo(width - 20, 20);
+    ctx.lineTo(width - 20, 20 + cornerSize);
+    ctx.stroke();
+    
+    // Нижний левый угол
+    ctx.beginPath();
+    ctx.moveTo(20, height - 20 - cornerSize);
+    ctx.lineTo(20, height - 20);
+    ctx.lineTo(20 + cornerSize, height - 20);
+    ctx.stroke();
+    
+    // Нижний правый угол
+    ctx.beginPath();
+    ctx.moveTo(width - 20 - cornerSize, height - 20);
+    ctx.lineTo(width - 20, height - 20);
+    ctx.lineTo(width - 20, height - 20 - cornerSize);
+    ctx.stroke();
+  }
+
+  /**
+   * Создает базовый градиентный poster
+   */
+  private createDefaultPoster(): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 450;
+    const ctx = canvas.getContext('2d')!;
+
+    // Градиентный фон
+    const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+    gradient.addColorStop(0, '#232323');
+    gradient.addColorStop(1, '#111111');
+    
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Центральная иконка
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, 50, 0, 2 * Math.PI);
+    ctx.fill();
+    
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    ctx.moveTo(centerX - 15, centerY - 20);
+    ctx.lineTo(centerX - 15, centerY + 20);
+    ctx.lineTo(centerX + 20, centerY);
+    ctx.closePath();
+    ctx.fill();
+
+    return canvas.toDataURL('image/png', 0.8);
   }
 
   /**
@@ -918,6 +1226,9 @@ class AnimeStarsKodikOptimizer {
       console.log('📺 Video can start playing');
       this.hideLoading();
       this.hideCenterPlayButton();
+      
+      // Запускаем автосохранение прогресса
+      this.startProgressTracking();
     });
 
     this.videoElement.addEventListener('waiting', () => {
@@ -933,6 +1244,9 @@ class AnimeStarsKodikOptimizer {
     this.videoElement.addEventListener('pause', () => {
       this.updatePlayButton(true);
       this.showCenterPlayButton();
+      
+      // Сохраняем прогресс при паузе
+      this.saveCurrentProgress();
     });
 
     this.videoElement.addEventListener('timeupdate', () => {
@@ -945,11 +1259,177 @@ class AnimeStarsKodikOptimizer {
 
     this.videoElement.addEventListener('ended', () => {
       this.showCenterPlayButton();
+      
+      // Сохраняем финальный прогресс
+      this.saveCurrentProgress();
+      
       // Автопереход к следующей серии
       if (this.currentEpisode < this.episodes.length) {
         setTimeout(() => this.switchEpisode(this.currentEpisode + 1), 2000);
       }
     });
+
+    // Сохраняем прогресс при закрытии страницы
+    window.addEventListener('beforeunload', () => {
+      this.saveCurrentProgress();
+    });
+  }
+
+  /**
+   * Запускает отслеживание прогресса просмотра
+   */
+  private startProgressTracking() {
+    if (!this.isProgressSystemActive || !this.currentAnimeInfo || !this.videoElement) {
+      console.log('⚠️ Progress tracking not available');
+      return;
+    }
+
+    console.log('📊 Starting progress tracking for:', this.currentAnimeInfo.title);
+    
+    // Запускаем автосохранение прогресса
+    ProgressManager.startAutoSave(this.currentAnimeInfo, this.videoElement);
+  }
+
+  /**
+   * Сохраняет текущий прогресс просмотра
+   */
+  private async saveCurrentProgress() {
+    if (!this.isProgressSystemActive || !this.currentAnimeInfo || !this.videoElement) {
+      return;
+    }
+
+    try {
+      await ProgressManager.saveProgress(
+        this.currentAnimeInfo,
+        this.videoElement.currentTime,
+        this.videoElement.duration
+      );
+    } catch (error) {
+      console.error('❌ Failed to save progress:', error);
+    }
+  }
+
+  /**
+   * Останавливает отслеживание прогресса
+   */
+  private stopProgressTracking() {
+    ProgressManager.stopAutoSave();
+  }
+
+  /**
+   * Обновляет информацию об аниме для текущего эпизода
+   */
+  private updateAnimeInfoForCurrentEpisode() {
+    if (!this.currentAnimeInfo || !this.currentTranslation) return;
+
+    this.currentAnimeInfo = {
+      ...this.currentAnimeInfo,
+      currentEpisode: this.currentEpisode,
+      totalEpisodes: this.episodes.length > 0 ? this.episodes.length : undefined,
+      translationId: this.currentTranslation.translationId,
+      url: window.location.href
+    };
+
+    console.log('📺 Updated anime info for episode:', this.currentEpisode, this.currentAnimeInfo);
+  }
+
+  /**
+   * Проверяет сохраненный прогресс и автоматически восстанавливает его (только при первой загрузке)
+   */
+  private async checkAndOfferProgressResume() {
+    if (!this.isProgressSystemActive || !this.currentAnimeInfo) return;
+
+    // Восстанавливаем прогресс только при первой загрузке страницы
+    if (!this.isFirstLoad) {
+      console.log('📺 Skipping progress restore - not first load');
+      return;
+    }
+
+    try {
+      const resumeOptions = await ProgressManager.checkForResume(this.currentAnimeInfo);
+      
+      if (resumeOptions) {
+        console.log('📺 Found saved progress, restoring automatically:', resumeOptions);
+        
+        // Проверяем, нужно ли переключить озвучку
+        if (resumeOptions.translation && this.currentTranslation?.translationId !== resumeOptions.translation) {
+          console.log(`📺 Switching to saved translation: ${resumeOptions.translation}`);
+          
+          // Ищем нужную озвучку в списке
+          const targetTranslation = this.translations.find(t => t.translationId === resumeOptions.translation);
+          
+          if (targetTranslation) {
+            console.log(`📺 Found target translation: ${targetTranslation.title}`);
+            this.currentTranslation = targetTranslation;
+            
+            // Обновляем UI селектора озвучек
+            const translationButtons = this.playerContainer?.querySelectorAll('.translation-btn');
+            translationButtons?.forEach((btn, index) => {
+              (btn as HTMLElement).style.background = 
+                this.translations[index] === targetTranslation ? '#007bff' : '#333';
+            });
+            
+            // Перезагружаем эпизоды для новой озвучки
+            await this.loadEpisodes();
+            
+            // Пересоздаем селектор эпизодов если нужно
+            const oldEpisodeSelector = this.playerContainer?.querySelector('.episode-selector');
+            if (oldEpisodeSelector) {
+              oldEpisodeSelector.remove();
+              this.createEpisodeSelector();
+            }
+          } else {
+            console.warn(`⚠️ Translation ${resumeOptions.translation} not found in current list`);
+          }
+        }
+        
+        // Проверяем, нужно ли переключить эпизод
+        if (resumeOptions.episode !== this.currentEpisode) {
+          console.log(`📺 Switching to saved episode: ${resumeOptions.episode}`);
+          this.currentEpisode = resumeOptions.episode;
+          this.updateAnimeInfoForCurrentEpisode();
+          
+          // Обновляем UI селектора эпизодов
+          const episodeButtons = this.playerContainer?.querySelectorAll('.episode-btn');
+          episodeButtons?.forEach(btn => {
+            const btnEpisode = parseInt(btn.textContent || '0');
+            (btn as HTMLElement).style.background = 
+              btnEpisode === this.currentEpisode ? '#007bff' : '#444';
+          });
+        }
+        
+        // Показываем информационное уведомление
+        ProgressManager.showResumeNotification(this.currentAnimeInfo, resumeOptions);
+        
+        // Устанавливаем время воспроизведения после загрузки видео
+        if (this.videoElement) {
+          const setResumeTime = () => {
+            if (this.videoElement && resumeOptions.resumeTime > 0) {
+              this.videoElement.currentTime = resumeOptions.resumeTime;
+              console.log(`📺 Resumed playback at: ${ProgressManager.formatTime(resumeOptions.resumeTime)}`);
+            }
+          };
+          
+          if (this.videoElement.readyState >= 1) {
+            // Метаданные уже загружены
+            setResumeTime();
+          } else {
+            // Ждем загрузку метаданных
+            this.videoElement.addEventListener('loadedmetadata', setResumeTime, { once: true });
+          }
+        }
+        
+        // Отмечаем что первая загрузка завершена
+        this.isFirstLoad = false;
+      } else {
+        // Даже если нет прогресса для восстановления, отмечаем первую загрузку как завершенную
+        this.isFirstLoad = false;
+      }
+    } catch (error) {
+      console.error('❌ Failed to check progress resume:', error);
+      // В случае ошибки тоже отмечаем первую загрузку как завершенную
+      this.isFirstLoad = false;
+    }
   }
 
   /**
@@ -1338,6 +1818,15 @@ class AnimeStarsKodikOptimizer {
     console.log('🔄 Loading video for episode:', this.currentEpisode);
 
     try {
+      // Обновляем информацию об аниме для текущего эпизода
+      this.updateAnimeInfoForCurrentEpisode();
+
+      // Обновляем poster для нового эпизода
+      await this.createVideoPoster();
+
+      // Проверяем есть ли сохраненный прогресс
+      await this.checkAndOfferProgressResume();
+
       console.log('🔍 Getting real video URL from Kodik...');
       
       // Строим URL для конкретного эпизода
@@ -1357,6 +1846,8 @@ class AnimeStarsKodikOptimizer {
       
       console.log('📄 HTML response length:', html.length);
       console.log('📄 HTML preview:', html.substring(0, 500));
+      
+      // ... остальная логика загрузки видео остается без изменений ...
       
       // Попробуем разные варианты поиска urlParams
       let urlParams;
@@ -1609,8 +2100,20 @@ class AnimeStarsKodikOptimizer {
   private async switchTranslation(translation: Translation) {
     console.log('🔄 Switching translation to:', translation.title);
     
+    // Останавливаем отслеживание прогресса
+    this.stopProgressTracking();
+    
+    // Сохраняем текущий прогресс
+    await this.saveCurrentProgress();
+    
+    // Отмечаем что это уже не первая загрузка (пользователь переключил вручную)
+    this.isFirstLoad = false;
+    
     this.currentTranslation = translation;
-    this.currentEpisode = 1;
+    // НЕ сбрасываем эпизод на 1 - пусть прогресс восстановится автоматически
+
+    // Обновляем информацию об аниме
+    this.updateAnimeInfoForCurrentEpisode();
 
     // Обновляем кнопки переводов
     const translationButtons = this.playerContainer?.querySelectorAll('.translation-btn');
@@ -1629,7 +2132,7 @@ class AnimeStarsKodikOptimizer {
       this.createEpisodeSelector();
     }
 
-    // Загружаем новое видео
+    // Загружаем новое видео (прогресс НЕ восстановится, так как isFirstLoad = false)
     await this.loadVideo();
   }
 
@@ -1639,7 +2142,19 @@ class AnimeStarsKodikOptimizer {
   private async switchEpisode(episodeNumber: number) {
     console.log('🔄 Switching to episode:', episodeNumber);
     
+    // Останавливаем отслеживание прогресса
+    this.stopProgressTracking();
+    
+    // Сохраняем текущий прогресс
+    await this.saveCurrentProgress();
+    
+    // Отмечаем что это уже не первая загрузка (пользователь переключил вручную)
+    this.isFirstLoad = false;
+    
     this.currentEpisode = episodeNumber;
+
+    // Обновляем информацию об аниме
+    this.updateAnimeInfoForCurrentEpisode();
 
     // Обновляем кнопки эпизодов
     const episodeButtons = this.playerContainer?.querySelectorAll('.episode-btn');
@@ -1649,7 +2164,7 @@ class AnimeStarsKodikOptimizer {
         btnEpisode === episodeNumber ? '#007bff' : '#444';
     });
 
-    // Загружаем новое видео
+    // Загружаем новое видео (прогресс НЕ восстановится, так как isFirstLoad = false)
     await this.loadVideo();
   }
 
