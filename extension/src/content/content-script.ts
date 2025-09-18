@@ -50,27 +50,163 @@ class AnimeStarsKodikOptimizer {
   private currentAnimeInfo: AnimeInfo | null = null;
   private isProgressSystemActive: boolean = false;
   private isFirstLoad: boolean = true; // Флаг первой загрузки
+  
+  // Кэш для оптимизации
+  private domCache = new Map<string, Element | null>();
+  private preloadedResources = new Set<string>();
 
   /**
-   * Инициализация оптимизатора
+   * Инициализация оптимизатора с мгновенной заменой
    */
   async init() {
     console.log('🚀 AnimeStars Kodik Optimizer starting...');
     
-    // Дополнительная проверка готовности элементов
-    await this.waitForPageReady();
+    // Мгновенно показываем плейсхолдер для улучшения perceived performance
+    this.showInstantPlaceholder();
+    
+    // Предзагружаем критические ресурсы параллельно
+    const preloadPromise = this.preloadCriticalResources();
+    
+    // Ожидаем готовность страницы с таймаутом
+    const readyPromise = this.waitForPageReady();
+    
+    // Выполняем операции параллельно
+    await Promise.allSettled([preloadPromise, readyPromise]);
     
     // Запускаем основную логику
     await this.start();
   }
 
   /**
-   * Ожидание готовности страницы и элементов
+   * Мгновенно показывает плейсхолдер для улучшения perceived performance
+   */
+  private showInstantPlaceholder() {
+    const playerSelectors = [
+      '.pmovie__player iframe[src*="kodik"]',
+      'iframe[src*="kodik.info"]',
+      'iframe[src*="kodikapi.com"]',
+      '.tabs-block__content iframe'
+    ];
+
+    for (const selector of playerSelectors) {
+      const iframe = this.getCachedElement(selector) as HTMLIFrameElement;
+      if (iframe) {
+        const container = iframe.parentElement;
+        if (container) {
+          // Создаем мгновенный плейсхолдер
+          const placeholder = document.createElement('div');
+          placeholder.className = 'kodik-instant-placeholder';
+          placeholder.style.cssText = `
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            position: relative;
+            min-height: 400px;
+          `;
+          
+          // Добавляем анимированный индикатор загрузки
+          placeholder.innerHTML = `
+            <div style="text-align: center; color: #fff;">
+              <div style="
+                width: 50px;
+                height: 50px;
+                border: 3px solid rgba(255, 107, 53, 0.3);
+                border-top: 3px solid #ff6b35;
+                border-radius: 50%;
+                animation: spin 1s linear infinite;
+                margin: 0 auto 15px;
+              "></div>
+              <div style="font-size: 16px; opacity: 0.9;">Загружаем быстрый плеер...</div>
+            </div>
+            <style>
+              @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+              }
+            </style>
+          `;
+
+          // Скрываем оригинальный iframe без удаления
+          iframe.style.display = 'none';
+          
+          // Вставляем плейсхолдер
+          container.insertBefore(placeholder, iframe);
+          
+          console.log('✨ Instant placeholder shown');
+          break;
+        }
+      }
+    }
+  }
+
+  /**
+   * Предзагружает критические ресурсы
+   */
+  private async preloadCriticalResources(): Promise<void> {
+    const resources = [
+      { url: '/hls.min.js', type: 'script' },
+      { url: '/player.css', type: 'style' },
+      { url: 'https://kodik-add.com/add-players.min.js?v=2', type: 'script' }
+    ];
+
+    const preloadPromises = resources.map(async (resource) => {
+      if (this.preloadedResources.has(resource.url)) return;
+
+      try {
+        if (resource.type === 'script') {
+          const link = document.createElement('link');
+          link.rel = 'preload';
+          link.as = 'script';
+          link.href = resource.url;
+          document.head.appendChild(link);
+        } else if (resource.type === 'style') {
+          const link = document.createElement('link');
+          link.rel = 'preload';
+          link.as = 'style';
+          link.href = resource.url;
+          document.head.appendChild(link);
+        }
+        
+        this.preloadedResources.add(resource.url);
+        console.log(`⚡ Preloaded: ${resource.url}`);
+      } catch (error) {
+        console.warn(`Failed to preload ${resource.url}:`, error);
+      }
+    });
+
+    await Promise.allSettled(preloadPromises);
+  }
+
+  /**
+   * Получает элемент из кэша или находит его в DOM
+   */
+  private getCachedElement(selector: string): Element | null {
+    if (this.domCache.has(selector)) {
+      const cached = this.domCache.get(selector);
+      // Проверяем что элемент все еще в DOM
+      if (cached && cached.isConnected) {
+        return cached;
+      }
+      this.domCache.delete(selector);
+    }
+
+    const element = document.querySelector(selector);
+    if (element) {
+      this.domCache.set(selector, element);
+    }
+    return element;
+  }
+
+  /**
+   * Ожидание готовности страницы с оптимизацией
    */
   private async waitForPageReady(): Promise<void> {
     console.log('⏳ Checking page readiness...');
     
-    // Проверяем наличие ключевых элементов
     const requiredSelectors = [
       '.b-translators__list',
       '#translators-list', 
@@ -78,52 +214,102 @@ class AnimeStarsKodikOptimizer {
       '.tabs-block__content'
     ];
     
-    let retries = 0;
-    const maxRetries = 30; // 30 секунд максимум
-    
-    while (retries < maxRetries) {
-      const foundElements = requiredSelectors.filter(selector => document.querySelector(selector));
+    // Используем IntersectionObserver для эффективного ожидания
+    return new Promise((resolve) => {
+      let foundCount = 0;
+      let resolved = false;
       
-      if (foundElements.length > 0) {
-        console.log('✅ Found page elements:', foundElements);
-        break;
+      const checkElements = () => {
+        if (resolved) return;
+        
+        const foundElements = requiredSelectors.filter(selector => {
+          const element = this.getCachedElement(selector);
+          return element !== null;
+        });
+        
+        if (foundElements.length > foundCount) {
+          foundCount = foundElements.length;
+          console.log(`✅ Found ${foundCount}/${requiredSelectors.length} elements:`, foundElements);
+          
+          if (foundCount > 0) {
+            resolved = true;
+            resolve();
+            return;
+          }
+        }
+      };
+      
+      // Проверяем сразу
+      checkElements();
+      
+      if (!resolved) {
+        // Используем MutationObserver для эффективного отслеживания
+        const observer = new MutationObserver((mutations) => {
+          // Batching: проверяем только если были изменения в childList
+          const hasChildListChanges = mutations.some(m => m.type === 'childList' && m.addedNodes.length > 0);
+          if (hasChildListChanges) {
+            requestAnimationFrame(checkElements);
+          }
+        });
+        
+        observer.observe(document.body, {
+          childList: true,
+          subtree: true
+        });
+        
+        // Таймаут с очисткой
+        setTimeout(() => {
+          if (!resolved) {
+            observer.disconnect();
+            console.log('⚠️ Timeout waiting for page elements, proceeding anyway...');
+            resolved = true;
+            resolve();
+          }
+        }, 15000); // Уменьшили с 30 до 15 секунд
+        
+        // Очистка наблюдателя при разрешении
+        const originalResolve = resolve;
+        resolve = () => {
+          observer.disconnect();
+          originalResolve();
+        };
       }
-      
-      console.log(`⏳ Waiting for page elements... (attempt ${retries + 1}/${maxRetries})`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      retries++;
-    }
-    
-    if (retries >= maxRetries) {
-      console.log('⚠️ Timeout waiting for page elements, proceeding anyway...');
-    }
+    });
   }
 
   /**
-   * Основная логика запуска
+   * Основная логика запуска с оптимизациями
    */
   private async start() {
     try {
-      // 1. Парсим список переводов из DOM
-      this.parseTranslations();
+      console.log('🎬 Starting optimized player initialization...');
+      
+      // Параллельно запускаем критические операции
+      const translationsPromise = this.parseTranslationsAsync();
+      const playerRemovalPromise = this.removeOriginalPlayerAsync();
+      
+      // Ждем парсинг переводов
+      await translationsPromise;
       
       if (this.translations.length === 0) {
         console.log('❌ No translations found');
         return;
       }
 
-      // 2. Извлекаем информацию об аниме
-      this.extractAnimeInfo();
+      // Параллельно извлекаем информацию об аниме и удаляем плеер
+      const [, ] = await Promise.allSettled([
+        this.extractAnimeInfoAsync(),
+        playerRemovalPromise
+      ]);
 
-      // 3. Удаляем оригинальный плеер
-      this.removeOriginalPlayer();
-
-      // 4. Создаем свой плеер
+      // Создаем плеер
       await this.createCustomPlayer();
 
       console.log('✅ AnimeStars Kodik Optimizer initialized successfully');
     } catch (error) {
       console.error('❌ Failed to initialize optimizer:', error);
+      // Показываем ошибку пользователю
+      this.showErrorState(error as Error);
     }
   }
 
@@ -1845,14 +2031,12 @@ class AnimeStarsKodikOptimizer {
       }
       
       console.log('📄 HTML response length:', html.length);
-      console.log('📄 HTML preview:', html.substring(0, 500));
-      
-      // ... остальная логика загрузки видео остается без изменений ...
+      console.log('📄 HTML preview:', html.substring(0,  500));
       
       // Попробуем разные варианты поиска urlParams
       let urlParams;
       
-      // Вариант 1: urlParams = '{"json":"string"}';
+      // Вариант 1: urlParams = '([^']+)';
       let urlParamsMatch = html.match(/urlParams = '([^']+)';/);
       if (urlParamsMatch) {
         console.log('✅ Found urlParams variant 1 (string)');
@@ -2257,6 +2441,203 @@ class AnimeStarsKodikOptimizer {
     
     console.log('❌ Could not decrypt URL, returning original');
     throw new Error('Decryption failed - could not find valid mp4:hls:manifest URL');
+  }
+
+  // Асинхронные оптимизированные методы
+  /**
+   * Асинхронный парсинг переводов с батчингом
+   */
+  async parseTranslationsAsync(): Promise<void> {
+    return new Promise((resolve) => {
+      // Используем requestIdleCallback для выполнения в свободное время
+      const idleCallback = (deadline: IdleDeadline) => {
+        console.log('🔍 Parsing translations asynchronously...');
+        
+        const translatorsList = this.getCachedElement('#translators-list, .b-translators__list');
+        if (!translatorsList) {
+          console.warn('⚠️ Translators list not found');
+          resolve();
+          return;
+        }
+
+        const translatorItems = translatorsList.querySelectorAll('.b-translator__item, li[data-this_link]');
+        const batchSize = 3; // Обрабатываем по 3 элемента за раз
+        let currentIndex = 0;
+        
+        const processBatch = () => {
+          const endIndex = Math.min(currentIndex + batchSize, translatorItems.length);
+          
+          for (let i = currentIndex; i < endIndex; i++) {
+            const item = translatorItems[i];
+            const link = item.getAttribute('data-this_link');
+            const title = item.textContent?.trim() || 'Unknown';
+            
+            if (link) {
+              const urlMatch = link.match(/\/serial\/(\d+)\/([a-f0-9]+)\/720p/);
+              if (urlMatch) {
+                const mediaId = urlMatch[1];
+                const mediaHash = urlMatch[2];
+                
+                const translation: Translation = {
+                  title,
+                  kodikUrl: link,
+                  translationId: `${mediaId}_${mediaHash}`,
+                  mediaId,
+                  mediaHash
+                };
+                
+                this.translations.push(translation);
+              }
+            }
+          }
+          
+          currentIndex = endIndex;
+          
+          // Если еще есть элементы и есть время
+          if (currentIndex < translatorItems.length && deadline.timeRemaining() > 1) {
+            processBatch();
+          } else if (currentIndex < translatorItems.length) {
+            // Планируем следующий батч
+            requestIdleCallback(idleCallback);
+          } else {
+            // Готово
+            this.currentTranslation = this.translations[0] || null;
+            console.log(`✅ Parsed ${this.translations.length} translations asynchronously`);
+            resolve();
+          }
+        };
+        
+        processBatch();
+      };
+      
+      if ('requestIdleCallback' in window) {
+        requestIdleCallback(idleCallback);
+      } else {
+        // Fallback для браузеров без requestIdleCallback
+        setTimeout(() => idleCallback({ timeRemaining: () => 50, didTimeout: false }), 0);
+      }
+    });
+  }
+
+  /**
+   * Асинхронное удаление оригинального плеера
+   */
+  async removeOriginalPlayerAsync(): Promise<void> {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        const playerSelectors = [
+          '.pmovie__player iframe[src*="kodik"]',
+          'iframe[src*="kodik.info"]',
+          'iframe[src*="kodikapi.com"]',
+          '.tabs-block__content iframe'
+        ];
+
+        // Batch DOM operations
+        const elementsToHide: HTMLElement[] = [];
+        
+        for (const selector of playerSelectors) {
+          const iframe = this.getCachedElement(selector) as HTMLElement;
+          if (iframe) {
+            elementsToHide.push(iframe);
+            
+            // Скрываем все связанные контейнеры
+            let parent = iframe.parentElement;
+            while (parent && parent !== document.body) {
+              if (parent.querySelector('iframe[src*="kodik"]')) {
+                elementsToHide.push(parent);
+                break;
+              }
+              parent = parent.parentElement;
+            }
+          }
+        }
+        
+        // Применяем изменения одним батчом
+        if (elementsToHide.length > 0) {
+          elementsToHide.forEach(el => {
+            el.style.display = 'none';
+          });
+          console.log(`🗑️ Hidden ${elementsToHide.length} original player elements asynchronously`);
+        }
+        
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Асинхронное извлечение информации об аниме
+   */
+  async extractAnimeInfoAsync(): Promise<void> {
+    return new Promise((resolve) => {
+      requestAnimationFrame(() => {
+        console.log('🔍 Extracting anime info asynchronously...');
+        
+        if (!this.currentTranslation) {
+          console.warn('⚠️ No current translation available');
+          resolve();
+          return;
+        }
+
+        const animeId = this.currentTranslation.mediaId;
+        let title = document.title;
+        
+        // Оптимизированная очистка названия
+        title = title
+          .replace(/\s*[-|]\s*(смотреть|аниме|онлайн).*$/i, '')
+          .replace(/\s*\(\d{4}\).*$/, '')
+          .trim();
+
+        if (!title || title.length < 3) {
+          const titleSelectors = ['h1', '.anime-title', '.title', '.pmovie__title'];
+          for (const selector of titleSelectors) {
+            const element = this.getCachedElement(selector);
+            if (element?.textContent?.trim()) {
+              title = element.textContent.trim();
+              break;
+            }
+          }
+        }
+
+        this.currentAnimeInfo = {
+          id: animeId,
+          title: title || 'Unknown Anime',
+          currentEpisode: this.currentEpisode,
+          totalEpisodes: this.episodes.length > 0 ? this.episodes.length : undefined,
+          translationId: this.currentTranslation.translationId,
+          url: window.location.href
+        };
+
+        console.log('📺 Extracted anime info asynchronously:', this.currentAnimeInfo);
+        this.isProgressSystemActive = true;
+        resolve();
+      });
+    });
+  }
+
+  /**
+   * Показывает состояние ошибки пользователю
+   */
+  showErrorState(error: Error): void {
+    const placeholder = document.querySelector('.kodik-instant-placeholder');
+    if (placeholder) {
+      placeholder.innerHTML = `
+        <div style="text-align: center; color: #ff4444;">
+          <div style="font-size: 48px; margin-bottom: 15px;">⚠️</div>
+          <div style="font-size: 18px; margin-bottom: 10px;">Ошибка загрузки плеера</div>
+          <div style="font-size: 14px; opacity: 0.7;">${error.message}</div>
+          <button onclick="location.reload()" style="
+            background: #ff6b35;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            margin-top: 15px;
+            cursor: pointer;
+          ">Перезагрузить</button>
+        </div>
+      `;
+    }
   }
 }
 

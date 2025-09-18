@@ -1,190 +1,658 @@
-/* Стили для быстрого Kodik плеера */
+/* Оптимизированные стили для быстрого Kodik плеера */
+/* Включает CSS-анимации, градиенты, modern UI и responsive design */
+
+/* CSS Custom Properties для темизации */
+:root {
+  --primary-color: #ff6b35;
+  --primary-dark: #e55a2b;
+  --background-dark: #1a1a1a;
+  --background-medium: #2d2d2d;
+  --background-light: #404040;
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.8);
+  --text-muted: rgba(255, 255, 255, 0.6);
+  --overlay-bg: rgba(0, 0, 0, 0.7);
+  --border-radius: 8px;
+  --animation-speed: 0.3s;
+  --shadow-light: 0 2px 8px rgba(0, 0, 0, 0.15);
+  --shadow-medium: 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-heavy: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* Мгновенный плейсхолдер */
+.kodik-instant-placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, var(--background-dark) 0%, var(--background-medium) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--border-radius);
+  position: relative;
+  min-height: 400px;
+  animation: placeholderFadeIn var(--animation-speed) ease-out;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* Основной контейнер плеера */
 .kodik-fast-player {
   width: 100%;
   height: 100%;
-  background: #000;
+  background: var(--background-dark);
   position: relative;
-  border-radius: 8px;
+  border-radius: var(--border-radius);
   overflow: hidden;
+  box-shadow: var(--shadow-medium);
+  animation: playerSlideIn var(--animation-speed) cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
 }
 
+/* Видео элемент */
 .kodik-fast-player video {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  background: var(--background-dark);
+  display: block;
 }
 
+/* Контейнер контролов */
 .kodik-fast-player .controls {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  background: linear-gradient(transparent, rgba(0,0,0,0.8));
+  background: linear-gradient(
+    to top,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.7) 60%,
+    transparent 100%
+  );
   padding: 20px 15px 15px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(10px);
+  transition: all var(--animation-speed) cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: opacity, visibility, transform;
+}
+
+/* Показ контролов */
+.kodik-fast-player:hover .controls,
+.kodik-fast-player.controls-visible .controls,
+.kodik-fast-player .controls:focus-within {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/* Прогресс бар */
+.kodik-fast-player .progress-container {
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  margin-bottom: 12px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: height 0.2s ease;
+}
+
+.kodik-fast-player .progress-container:hover {
+  height: 8px;
+}
+
+.kodik-fast-player .progress-container .buffered-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+  transition: width 0.1s linear;
+}
+
+.kodik-fast-player .progress-container .progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary-color), var(--primary-dark));
+  border-radius: 3px;
+  transition: width 0.1s linear;
+  box-shadow: 0 0 10px rgba(255, 107, 53, 0.4);
+}
+
+.kodik-fast-player .progress-container .progress-handle {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  background: var(--text-primary);
+  border: 2px solid var(--primary-color);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  cursor: grab;
+}
+
+.kodik-fast-player .progress-container:hover .progress-handle {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1.1);
+}
+
+.kodik-fast-player .progress-handle:active {
+  cursor: grabbing;
+  transform: translate(-50%, -50%) scale(1.2);
+}
+
+/* Контролы плеера */
+.kodik-fast-player .controls-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* Кнопки контролов */
+.kodik-fast-player .control-button {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  position: relative;
+  outline: none;
+  min-width: 40px;
+  height: 40px;
+}
+
+.kodik-fast-player .control-button:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--primary-color);
+  transform: scale(1.05);
+}
+
+.kodik-fast-player .control-button:active {
+  transform: scale(0.95);
+}
+
+.kodik-fast-player .control-button:focus-visible {
+  box-shadow: 0 0 0 2px var(--primary-color);
+}
+
+/* Центральная кнопка воспроизведения */
+.kodik-fast-player .center-play-button {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 80px;
+  height: 80px;
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  border: none;
+  border-radius: 50%;
+  color: var(--text-primary);
+  font-size: 32px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: all var(--animation-speed) cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--shadow-heavy);
+  z-index: 10;
+}
+
+.kodik-fast-player.paused .center-play-button {
+  opacity: 1;
+  visibility: visible;
+  animation: pulsePlay 2s infinite;
+}
+
+.kodik-fast-player .center-play-button:hover {
+  transform: translate(-50%, -50%) scale(1.1);
+  box-shadow: 0 12px 40px rgba(255, 107, 53, 0.4);
+}
+
+.kodik-fast-player .center-play-button:active {
+  transform: translate(-50%, -50%) scale(0.95);
+}
+
+/* Время воспроизведения */
+.kodik-fast-player .time-display {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 500;
+  min-width: 100px;
+  text-align: center;
+  font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Контрол громкости */
+.kodik-fast-player .volume-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.kodik-fast-player .volume-slider {
+  width: 0;
+  opacity: 0;
+  transition: all 0.3s ease;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 2px;
+  outline: none;
+}
+
+.kodik-fast-player .volume-container:hover .volume-slider {
+  width: 80px;
+  opacity: 1;
+  margin-left: 8px;
+}
+
+.kodik-fast-player .volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  background: var(--primary-color);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--text-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+.kodik-fast-player .volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  background: var(--primary-color);
+  border-radius: 50%;
+  cursor: pointer;
+  border: 2px solid var(--text-primary);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+}
+
+/* Селекторы переводов и эпизодов */
+.kodik-fast-player .player-selectors {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  display: flex;
+  gap: 10px;
+  z-index: 5;
+}
+
+.kodik-fast-player .selector-container {
+  background: var(--overlay-bg);
+  backdrop-filter: blur(10px);
+  border-radius: var(--border-radius);
+  padding: 8px 12px;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: all var(--animation-speed) ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.kodik-fast-player:hover .selector-container,
+.kodik-fast-player .selector-container:focus-within {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.kodik-fast-player .player-select {
+  background: none;
+  border: none;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  outline: none;
+  min-width: 120px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+}
+
+.kodik-fast-player .player-select:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.kodik-fast-player .player-select option {
+  background: var(--background-medium);
+  color: var(--text-primary);
+  padding: 8px;
+}
+
+/* Индикатор загрузки */
+.kodik-fast-player .loading-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 15;
   opacity: 0;
   transition: opacity 0.3s ease;
 }
 
-.kodik-fast-player:hover .controls {
+.kodik-fast-player.loading .loading-indicator {
   opacity: 1;
 }
 
-.kodik-fast-player .progress-bar {
-  width: 100%;
-  height: 4px;
-  background: rgba(255,255,255,0.3);
-  border-radius: 2px;
-  margin-bottom: 10px;
-  cursor: pointer;
+.kodik-fast-player .loading-spinner {
+  width: 50px;
+  height: 50px;
+  border: 3px solid rgba(255, 107, 53, 0.3);
+  border-top: 3px solid var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
 }
 
-.kodik-fast-player .progress-bar .progress {
-  height: 100%;
-  background: #ff6b35;
-  border-radius: 2px;
-  transition: width 0.1s ease;
-}
-
-.kodik-fast-player .controls-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.kodik-fast-player .controls-left {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.kodik-fast-player .controls-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.kodik-fast-player button {
-  background: none;
-  border: none;
-  color: white;
-  cursor: pointer;
-  padding: 5px;
-  border-radius: 3px;
-  transition: background 0.2s;
-}
-
-.kodik-fast-player button:hover {
-  background: rgba(255,255,255,0.2);
-}
-
-.kodik-fast-player .time {
-  color: white;
-  font-size: 14px;
-  font-family: Arial, sans-serif;
-}
-
-.kodik-fast-player .volume-slider {
-  width: 60px;
-  height: 4px;
-  background: rgba(255,255,255,0.3);
-  border-radius: 2px;
-  cursor: pointer;
-}
-
-.kodik-fast-player .volume-slider .volume-level {
-  height: 100%;
-  background: #ff6b35;
-  border-radius: 2px;
-}
-
-.kodik-fast-player .quality-selector {
-  position: relative;
-}
-
-.kodik-fast-player .quality-menu {
-  position: absolute;
-  bottom: 100%;
-  right: 0;
-  background: rgba(0,0,0,0.9);
-  border-radius: 4px;
-  padding: 5px 0;
-  min-width: 80px;
-  display: none;
-}
-
-.kodik-fast-player .quality-menu.show {
-  display: block;
-}
-
-.kodik-fast-player .quality-menu button {
-  width: 100%;
-  text-align: left;
-  padding: 5px 15px;
-  white-space: nowrap;
-}
-
-.kodik-fast-player .quality-menu button.active {
-  background: #ff6b35;
-}
-
-.kodik-fast-player .loading {
+/* Overlay сообщений */
+.kodik-fast-player .message-overlay {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  color: white;
-  font-size: 18px;
-}
-
-.kodik-fast-player .error {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  color: #ff4444;
+  background: var(--overlay-bg);
+  backdrop-filter: blur(10px);
+  padding: 20px 30px;
+  border-radius: var(--border-radius);
+  color: var(--text-primary);
   text-align: center;
   font-size: 16px;
+  font-weight: 500;
+  z-index: 20;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow-heavy);
+  max-width: 400px;
+  word-wrap: break-word;
 }
 
-/* Индикаторы загрузки и статуса расширения */
-.animestars-loading {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
+.kodik-fast-player .message-overlay.visible {
+  opacity: 1;
+  visibility: visible;
+  animation: messageSlideIn 0.3s ease-out;
 }
 
-.animestars-error {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(220, 53, 69, 0.9);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 10000;
+.kodik-fast-player .message-overlay.error {
+  background: linear-gradient(135deg, rgba(220, 38, 38, 0.9), rgba(185, 28, 28, 0.9));
+  border-color: rgba(220, 38, 38, 0.5);
 }
 
-/* Анимация загрузки */
-.spinner {
-  border: 3px solid rgba(255,255,255,0.3);
-  border-top: 3px solid #ff6b35;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  animation: spin 1s linear infinite;
-  margin: 0 auto 10px;
+/* Полноэкранный режим */
+.kodik-fast-player:-webkit-full-screen {
+  border-radius: 0;
 }
 
+.kodik-fast-player:-moz-full-screen {
+  border-radius: 0;
+}
+
+.kodik-fast-player:fullscreen {
+  border-radius: 0;
+}
+
+/* Адаптивность */
+@media (max-width: 768px) {
+  .kodik-fast-player .controls {
+    padding: 15px 10px 10px;
+  }
+  
+  .kodik-fast-player .controls-row {
+    gap: 8px;
+  }
+  
+  .kodik-fast-player .control-button {
+    min-width: 36px;
+    height: 36px;
+    padding: 6px;
+  }
+  
+  .kodik-fast-player .center-play-button {
+    width: 60px;
+    height: 60px;
+    font-size: 24px;
+  }
+  
+  .kodik-fast-player .player-selectors {
+    position: static;
+    flex-direction: column;
+    gap: 5px;
+    margin: 10px;
+  }
+  
+  .kodik-fast-player .time-display {
+    font-size: 12px;
+    min-width: 80px;
+  }
+  
+  .kodik-fast-player .volume-container:hover .volume-slider {
+    width: 60px;
+  }
+}
+
+@media (max-width: 480px) {
+  .kodik-fast-player .controls-row {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  
+  .kodik-fast-player .message-overlay {
+    padding: 15px 20px;
+    font-size: 14px;
+    max-width: 300px;
+  }
+}
+
+/* Анимации */
 @keyframes spin {
   0% { transform: rotate(0deg); }
   100% { transform: rotate(360deg); }
+}
+
+@keyframes pulsePlay {
+  0%, 100% { 
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: var(--shadow-heavy);
+  }
+  50% { 
+    transform: translate(-50%, -50%) scale(1.05);
+    box-shadow: 0 12px 40px rgba(255, 107, 53, 0.6);
+  }
+}
+
+@keyframes placeholderFadeIn {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes playerSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes messageSlideIn {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.9) translateY(-10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1) translateY(0);
+  }
+}
+
+/* Скрытие курсора в полноэкранном режиме */
+.kodik-fast-player.fullscreen.hide-cursor {
+  cursor: none;
+}
+
+.kodik-fast-player.fullscreen.hide-cursor * {
+  cursor: none !important;
+}
+
+/* Плавные переходы для всех интерактивных элементов */
+.kodik-fast-player * {
+  box-sizing: border-box;
+}
+
+.kodik-fast-player button,
+.kodik-fast-player input,
+.kodik-fast-player select {
+  font-family: inherit;
+}
+
+/* Кастомные скроллбары */
+.kodik-fast-player select::-webkit-scrollbar {
+  width: 8px;
+}
+
+.kodik-fast-player select::-webkit-scrollbar-track {
+  background: var(--background-dark);
+}
+
+.kodik-fast-player select::-webkit-scrollbar-thumb {
+  background: var(--primary-color);
+  border-radius: 4px;
+}
+
+.kodik-fast-player select::-webkit-scrollbar-thumb:hover {
+  background: var(--primary-dark);
+}
+
+/* Улучшенная типографика */
+.kodik-fast-player {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Состояния кнопок */
+.kodik-fast-player .control-button.active {
+  color: var(--primary-color);
+  background: rgba(255, 107, 53, 0.1);
+}
+
+.kodik-fast-player .control-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.kodik-fast-player .control-button:disabled:hover {
+  transform: none;
+  background: none;
+}
+
+/* Кнопки переводов */
+.kodik-fast-player .translation-buttons {
+  position: absolute;
+  top: 15px;
+  left: 15px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: calc(100% - 200px);
+  z-index: 5;
+}
+
+.kodik-fast-player .translation-btn {
+  background: var(--overlay-bg);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  padding: 6px 12px;
+  border-radius: var(--border-radius);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transform: translateY(-10px);
+  transition: all var(--animation-speed) ease;
+  white-space: nowrap;
+}
+
+.kodik-fast-player:hover .translation-btn {
+  opacity: 0.8;
+  transform: translateY(0);
+}
+
+.kodik-fast-player .translation-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(0) scale(1.05);
+}
+
+.kodik-fast-player .translation-btn.active {
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-dark));
+  border-color: var(--primary-color);
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Качество видео индикатор */
+.kodik-fast-player .quality-indicator {
+  position: absolute;
+  top: 15px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--overlay-bg);
+  backdrop-filter: blur(10px);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.kodik-fast-player.loading .quality-indicator,
+.kodik-fast-player:hover .quality-indicator {
+  opacity: 1;
+}
+
+/* Производительные CSS свойства */
+.kodik-fast-player .controls,
+.kodik-fast-player .center-play-button,
+.kodik-fast-player .selector-container,
+.kodik-fast-player .translation-btn,
+.kodik-fast-player .message-overlay {
+  will-change: auto;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+/* Оптимизация для ретина дисплеев */
+@media (-webkit-min-device-pixel-ratio: 2) {
+  .kodik-fast-player .progress-bar,
+  .kodik-fast-player .buffered-bar {
+    transform: translateZ(0);
+  }
 }

@@ -1,5 +1,5 @@
-// Главный клиент для работы с Kodik API
-// Портирован из Python KodikParser
+// Оптимизированный клиент для работы с Kodik API
+// Включает кэширование, пулинг соединений, retry logic и батчинг
 
 import { 
   KodikApiResponse, 
@@ -11,147 +11,681 @@ import { isValidKodikToken } from '../utils/url-parser';
 import { getKodikToken, cacheKodikToken } from '../utils/cache';
 import { decryptKodikUrl, getVideoLinks, extractVideoDataFromPage } from '../utils/decryption';
 
-export class KodikAPI {
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+  expires: number;
+}
+
+interface RequestOptions {
+  timeout?: number;
+  retries?: number;
+  priority?: 'low' | 'normal' | 'high';
+}
+
+export class KodikAPIOptimized {
   private token: string | null = null;
   private readonly baseUrl = 'https://kodikapi.com';
+  
+  // Многоуровневое кэширование
+  private static memoryCache = new Map<string, CacheEntry<any>>();
+  private static tokenCache: CacheEntry<string> | null = null;
+  
+  // Конфигурация кэша
+  private static readonly CACHE_CONFIG = {
+    TOKEN_TTL: 60 * 60 * 1000,      // 1 час
+    API_RESPONSE_TTL: 10 * 60 * 1000, // 10 минут
+    VIDEO_URL_TTL: 5 * 60 * 1000,    // 5 минут (видео ссылки живут меньше)
+    MAX_CACHE_SIZE: 100,              // Максимум записей в кэше
+    CLEANUP_INTERVAL: 5 * 60 * 1000   // Очистка кэша каждые 5 минут
+  };
+  
+  // Пул активных запросов для предотвращения дублей
+  private static requestPool = new Map<string, Promise<any>>();
+  
+  // Очередь запросов с приоритетами
+  private static requestQueue: Array<{
+    key: string;
+    priority: number;
+    executor: () => Promise<any>;
+    resolve: (value: any) => void;
+    reject: (error: any) => void;
+  }> = [];
+  
+  private static queueProcessor: NodeJS.Timeout | null = null;
+  private static isProcessingQueue = false;
 
   constructor(token?: string) {
     if (token && isValidKodikToken(token)) {
       this.token = token;
     }
+    
+    // Запускаем периодическую очистку кэша
+    this.setupCacheCleanup();
   }
 
   /**
-   * Получает токен Kodik автоматически
-   * Портирован из get_token в Python
+   * Настраивает периодическую очистку кэша
    */
-  async getToken(): Promise<string> {
+  private setupCacheCleanup(): void {
+    if (!KodikAPIOptimized.queueProcessor) {
+      KodikAPIOptimized.queueProcessor = setInterval(() => {
+        this.cleanupCache();
+      }, KodikAPIOptimized.CACHE_CONFIG.CLEANUP_INTERVAL);
+    }
+  }
+
+  /**
+   * Очищает устаревшие записи кэша
+   */
+  private cleanupCache(): void {
+    const now = Date.now();
+    const keysToDelete: string[] = [];
+    
+    for (const [key, entry] of KodikAPIOptimized.memoryCache) {
+      if (now >= entry.expires) {
+        keysToDelete.push(key);
+      }
+    }
+    
+    keysToDelete.forEach(key => {
+      KodikAPIOptimized.memoryCache.delete(key);
+    });
+    
+    // Проверяем размер кэша
+    if (KodikAPIOptimized.memoryCache.size > KodikAPIOptimized.CACHE_CONFIG.MAX_CACHE_SIZE) {
+      // Удаляем самые старые записи
+      const entries = Array.from(KodikAPIOptimized.memoryCache.entries());
+      entries.sort((a, b) => a[1].timestamp - b[1].timestamp);
+      
+      const toRemove = entries.slice(0, 20); // Удаляем 20 самых старых
+      toRemove.forEach(([key]) => {
+        KodikAPIOptimized.memoryCache.delete(key);
+      });
+    }
+    
+    console.log(`🧹 Cache cleanup: ${keysToDelete.length} expired, ${KodikAPIOptimized.memoryCache.size} total`);
+  }
+
+  /**
+   * Получает данные из кэша
+   */
+  private getCached<T>(key: string): T | null {
+    const entry = KodikAPIOptimized.memoryCache.get(key);
+    if (entry && Date.now() < entry.expires) {
+      console.log(`💾 Cache hit: ${key}`);
+      return entry.data;
+    }
+    
+    if (entry) {
+      KodikAPIOptimized.memoryCache.delete(key);
+    }
+    
+    return null;
+  }
+
+  /**
+   * Сохраняет данные в кэш
+   */
+  private setCached<T>(key: string, data: T, ttl: number): void {
+    const now = Date.now();
+    KodikAPIOptimized.memoryCache.set(key, {
+      data,
+      timestamp: now,
+      expires: now + ttl
+    });
+  }
+
+  /**
+   * Получает токен с многоуровневым кэшированием
+   */
+  async getToken(options: RequestOptions = {}): Promise<string> {
+    const now = Date.now();
+    
+    // 1. Проверяем memory cache
+    if (KodikAPIOptimized.tokenCache && now < KodikAPIOptimized.tokenCache.expires) {
+      this.token = KodikAPIOptimized.tokenCache.data;
+      return this.token;
+    }
+
+    // 2. Проверяем localStorage
     try {
-      // Сначала проверяем кэш
       const cachedToken = await getKodikToken();
       if (cachedToken && isValidKodikToken(cachedToken)) {
+        // Обновляем memory cache
+        KodikAPIOptimized.tokenCache = {
+          data: cachedToken,
+          timestamp: now,
+          expires: now + KodikAPIOptimized.CACHE_CONFIG.TOKEN_TTL
+        };
         this.token = cachedToken;
         return cachedToken;
       }
-
-      // Получаем токен с сервера
-      const scriptUrl = 'https://kodik-add.com/add-players.min.js?v=2';
-      const response = await fetch(scriptUrl);
-      const scriptText = await response.text();
-      
-      const tokenStart = scriptText.indexOf('token=') + 7;
-      const tokenEnd = scriptText.indexOf('"', tokenStart);
-      const token = scriptText.substring(tokenStart, tokenEnd);
-      
-      if (!isValidKodikToken(token)) {
-        throw new Error('Invalid token received');
-      }
-
-      // Кэшируем токен
-      await cacheKodikToken(token);
-      this.token = token;
-      
-      return token;
     } catch (error) {
-      console.error('Error getting Kodik token:', error);
-      throw new Error('Failed to get Kodik token');
+      console.warn('Failed to get cached token:', error);
+    }
+
+    // 3. Получаем новый токен с пулингом
+    const tokenKey = 'kodik_token_request';
+    
+    return this.executeWithPool(tokenKey, async () => {
+      const token = await this.fetchNewTokenWithRetry(options);
+      
+      // Кэшируем на всех уровнях
+      KodikAPIOptimized.tokenCache = {
+        data: token,
+        timestamp: now,
+        expires: now + KodikAPIOptimized.CACHE_CONFIG.TOKEN_TTL
+      };
+      
+      try {
+        await cacheKodikToken(token);
+      } catch (error) {
+        console.warn('Failed to cache token to localStorage:', error);
+      }
+      
+      this.token = token;
+      return token;
+    });
+  }
+
+  /**
+   * Получает новый токен с retry логикой
+   */
+  private async fetchNewTokenWithRetry(options: RequestOptions): Promise<string> {
+    const maxRetries = options.retries ?? 3;
+    const timeout = options.timeout ?? 10000;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔑 Fetching new token (attempt ${attempt}/${maxRetries})`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+        try {
+          const response = await fetch('https://kodik-add.com/add-players.min.js?v=2', {
+            signal: controller.signal,
+            headers: {
+              'Cache-Control': 'no-cache',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              'Accept': 'application/javascript, */*;q=0.1',
+              'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
+              'Sec-Fetch-Dest': 'script',
+              'Sec-Fetch-Mode': 'no-cors',
+              'Sec-Fetch-Site': 'cross-site'
+            }
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const scriptText = await response.text();
+          
+          // Улучшенный парсинг токена
+          const tokenMatches = scriptText.match(/token["\s]*[:=]["\s]*([a-f0-9]{32})/i);
+          if (!tokenMatches) {
+            throw new Error('Token pattern not found in script');
+          }
+          
+          const token = tokenMatches[1];
+          
+          if (!isValidKodikToken(token)) {
+            throw new Error(`Invalid token format: ${token}`);
+          }
+
+          console.log('✅ New token fetched successfully');
+          return token;
+          
+        } finally {
+          clearTimeout(timeoutId);
+        }
+        
+      } catch (error) {
+        console.warn(`❌ Token fetch attempt ${attempt} failed:`, error);
+        
+        if (attempt === maxRetries) {
+          throw new Error(`Failed to fetch token after ${maxRetries} attempts: ${error}`);
+        }
+        
+        // Exponential backoff
+        const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw new Error('Unexpected error in token fetch retry loop');
+  }
+
+  /**
+   * Выполняет запрос с пулингом соединений
+   */
+  private async executeWithPool<T>(key: string, executor: () => Promise<T>): Promise<T> {
+    // Проверяем активные запросы
+    if (KodikAPIOptimized.requestPool.has(key)) {
+      console.log(`♻️ Reusing active request: ${key}`);
+      return await KodikAPIOptimized.requestPool.get(key)!;
+    }
+
+    // Создаем новый запрос
+    const promise = executor();
+    KodikAPIOptimized.requestPool.set(key, promise);
+
+    try {
+      const result = await promise;
+      return result;
+    } finally {
+      KodikAPIOptimized.requestPool.delete(key);
     }
   }
 
   /**
-   * Выполняет запрос к Kodik API
+   * Выполняет API запрос с кэшированием и оптимизацией
    */
   private async apiRequest(
     endpoint: 'search' | 'list' | 'translations',
-    params: Partial<KodikSearchParams> = {}
+    params: Partial<KodikSearchParams> = {},
+    options: RequestOptions = {}
   ): Promise<KodikApiResponse> {
-    if (!this.token) {
-      await this.getToken();
+    // Создаем ключ кэша на основе запроса
+    const cacheKey = `api_${endpoint}_${this.hashParams(params)}`;
+    
+    // Проверяем кэш
+    const cached = this.getCached<KodikApiResponse>(cacheKey);
+    if (cached) {
+      return cached;
     }
 
-    const url = `${this.baseUrl}/${endpoint}`;
-    const formData = new FormData();
-    
-    // Добавляем токен
-    formData.append('token', this.token!);
-    
-    // Добавляем параметры
-    for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null) {
-        formData.append(key, value.toString());
-      }
-    }
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+    // Выполняем запрос с пулингом
+    return this.executeWithPool(cacheKey, async () => {
+      if (!this.token) {
+        await this.getToken(options);
       }
 
-      const data = await response.json();
+      const result = await this.performApiRequestWithRetry(endpoint, params, options);
       
-      if (data.error) {
-        if (data.error === 'Отсутствует или неверный токен') {
-          // Токен истек, получаем новый
-          this.token = null;
-          return this.apiRequest(endpoint, params);
-        }
-        throw new Error(data.error);
+      // Кэшируем успешный ответ
+      if (!(result as any).error) {
+        this.setCached(cacheKey, result, KodikAPIOptimized.CACHE_CONFIG.API_RESPONSE_TTL);
       }
 
-      if (data.total === 0) {
-        throw new Error('No results found');
-      }
-
-      return data;
-    } catch (error) {
-      console.error(`Kodik API ${endpoint} error:`, error);
-      throw error;
-    }
+      return result;
+    });
   }
 
   /**
-   * Поиск по названию
+   * Выполняет API запрос с retry логикой
+   */
+  private async performApiRequestWithRetry(
+    endpoint: string,
+    params: Partial<KodikSearchParams>,
+    options: RequestOptions
+  ): Promise<KodikApiResponse> {
+    const maxRetries = options.retries ?? 2;
+    const timeout = options.timeout ?? 15000;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`📡 API request to ${endpoint} (attempt ${attempt}/${maxRetries})`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeout);
+        
+        const formData = new FormData();
+        formData.append('token', this.token!);
+        
+        // Добавляем параметры
+        for (const [key, value] of Object.entries(params)) {
+          if (value !== undefined && value !== null) {
+            formData.append(key, value.toString());
+          }
+        }
+
+        try {
+          const response = await fetch(`${this.baseUrl}/${endpoint}`, {
+            method: 'POST',
+            body: formData,
+            signal: controller.signal,
+            headers: {
+              'Accept': 'application/json',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Origin': 'https://kodik.info',
+              'Referer': 'https://kodik.info/',
+              'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8'
+            }
+          });
+
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          
+          if (data.error) {
+            if (data.error === 'Отсутствует или неверный токен') {
+              // Сбрасываем токен и повторяем
+              this.token = null;
+              KodikAPIOptimized.tokenCache = null;
+              
+              if (attempt < maxRetries) {
+                await this.getToken(options);
+                continue;
+              }
+            }
+            throw new Error(`API error: ${data.error}`);
+          }
+
+          console.log(`✅ API request to ${endpoint} successful`);
+          return data;
+          
+        } finally {
+          clearTimeout(timeoutId);
+        }
+        
+      } catch (error) {
+        console.warn(`❌ API request attempt ${attempt} failed:`, error);
+        
+        if (attempt === maxRetries) {
+          throw error;
+        }
+        
+        // Exponential backoff
+        const delay = Math.min(500 * Math.pow(2, attempt - 1), 3000);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    
+    throw new Error('Unexpected error in API request retry loop');
+  }
+
+  /**
+   * Создает хэш параметров для кэширования
+   */
+  private hashParams(params: any): string {
+    const sorted = Object.keys(params)
+      .sort()
+      .reduce((result: any, key: string) => {
+        result[key] = params[key];
+        return result;
+      }, {});
+    
+    return btoa(JSON.stringify(sorted)).slice(0, 16);
+  }
+
+  /**
+   * Поиск с оптимизацией
    */
   async search(
     title: string, 
-    options: Partial<KodikSearchParams> = {}
+    options: Partial<KodikSearchParams> = {},
+    requestOptions: RequestOptions = {}
   ): Promise<KodikApiResponse> {
     const params: Partial<KodikSearchParams> = {
-      title: title + ' ', // Добавляем пробел как в Python версии
-      limit: 50,
+      title: title.trim() + ' ', // Добавляем пробел как в Python версии
+      limit: options.limit ?? 50,
       with_material_data: true,
       strict: false,
       ...options
     };
     
-    return this.apiRequest('search', params);
+    return this.apiRequest('search', params, requestOptions);
   }
 
   /**
-   * Поиск по ID
+   * Поиск по ID с оптимизацией
    */
   async searchById(
     id: string, 
     idType: IDType, 
-    options: Partial<KodikSearchParams> = {}
+    options: Partial<KodikSearchParams> = {},
+    requestOptions: RequestOptions = {}
   ): Promise<KodikApiResponse> {
     const params: Partial<KodikSearchParams> = {
       [`${idType}_id`]: id,
-      limit: 50,
+      limit: options.limit ?? 50,
       with_material_data: true,
       ...options
     };
     
-    return this.apiRequest('search', params);
+    return this.apiRequest('search', params, requestOptions);
   }
 
   /**
-   * Получает список переводов для медиа
+   * Батчевый поиск по нескольким ID
+   */
+  async searchByIdsBatch(
+    searches: Array<{ id: string, idType: IDType }>,
+    options: Partial<KodikSearchParams> = {},
+    requestOptions: RequestOptions = {}
+  ): Promise<Array<{ search: { id: string, idType: IDType }, result: KodikApiResponse | Error }>> {
+    console.log(`🔄 Batch search for ${searches.length} items`);
+    
+    // Выполняем поиски параллельно с ограничением
+    const batchSize = 5; // Максимум 5 параллельных запросов
+    const results: Array<{ search: { id: string, idType: IDType }, result: KodikApiResponse | Error }> = [];
+    
+    for (let i = 0; i < searches.length; i += batchSize) {
+      const batch = searches.slice(i, i + batchSize);
+      
+      const batchPromises = batch.map(async (search) => {
+        try {
+          const result = await this.searchById(search.id, search.idType, options, requestOptions);
+          return { search, result };
+        } catch (error) {
+          return { search, result: error as Error };
+        }
+      });
+      
+      const batchResults = await Promise.allSettled(batchPromises);
+      
+      batchResults.forEach(result => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          // Не должно происходить, так как мы ловим ошибки внутри
+          results.push({ 
+            search: { id: 'unknown', idType: 'shikimori' }, 
+            result: new Error(result.reason) 
+          });
+        }
+      });
+      
+      // Задержка между батчами для предотвращения rate limiting
+      if (i + batchSize < searches.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    console.log(`✅ Batch search completed: ${results.length} results`);
+    return results;
+  }
+
+  /**
+   * Получает URL видео с кэшированием
+   */
+  async getVideoUrl(
+    id: string, 
+    idType: IDType, 
+    episode: number, 
+    translationId: string,
+    options: RequestOptions = {}
+  ): Promise<{ url: string; maxQuality: number }> {
+    const cacheKey = `video_${id}_${idType}_${episode}_${translationId}`;
+    
+    // Проверяем кэш (короткий TTL для видео URL)
+    const cached = this.getCached<{ url: string; maxQuality: number }>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    return this.executeWithPool(cacheKey, async () => {
+      try {
+        console.log(`🎥 Getting video URL: ${id} ep${episode} trans${translationId}`);
+        
+        const link = await this.getLinkToInfo(id, idType);
+        let embedUrl: string;
+        
+        if (episode > 0 && translationId !== '0') {
+          // Для сериала с известной озвучкой
+          const response = await fetch(link);
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          
+          const container = doc.querySelector('.serial-translations-box select');
+          if (!container) throw new Error('Translations container not found');
+          
+          let mediaHash: string | null = null;
+          let mediaId: string | null = null;
+          
+          const options = container.querySelectorAll('option');
+          for (let i = 0; i < options.length; i++) {
+            const option = options[i];
+            if (option.getAttribute('data-id') === translationId) {
+              mediaHash = option.getAttribute('data-media-hash');
+              mediaId = option.getAttribute('data-media-id');
+              break;
+            }
+          }
+          
+          if (!mediaHash || !mediaId) {
+            throw new Error('Media hash/id not found for translation');
+          }
+          
+          embedUrl = `https://kodik.info/serial/${mediaId}/${mediaHash}/720p?min_age=16&first_url=false&season=1&episode=${episode}`;
+        } else if (translationId !== '0' && episode === 0) {
+          // Для фильма с переводом
+          const response = await fetch(link);
+          const html = await response.text();
+          const doc = new DOMParser().parseFromString(html, 'text/html');
+          
+          const container = doc.querySelector('.movie-translations-box select');
+          if (!container) throw new Error('Translations container not found');
+          
+          let mediaHash: string | null = null;
+          let mediaId: string | null = null;
+          
+          const options = container.querySelectorAll('option');
+          for (let i = 0; i < options.length; i++) {
+            const option = options[i];
+            if (option.getAttribute('data-id') === translationId) {
+              mediaHash = option.getAttribute('data-media-hash');
+              mediaId = option.getAttribute('data-media-id');
+              break;
+            }
+          }
+          
+          if (!mediaHash || !mediaId) {
+            throw new Error('Media hash/id not found for translation');
+          }
+          
+          embedUrl = `https://kodik.info/video/${mediaId}/${mediaHash}/720p?min_age=16&first_url=false&season=1&episode=0`;
+        } else {
+          embedUrl = link;
+        }
+        
+        // Получаем HTML страницы плеера
+        const playerResponse = await fetch(embedUrl);
+        const playerHtml = await playerResponse.text();
+        
+        // Извлекаем данные из страницы
+        const videoData = extractVideoDataFromPage(playerHtml);
+        if (!videoData) {
+          throw new Error('Failed to extract video data');
+        }
+        
+        // Получаем ссылки на видео
+        const result = await getVideoLinks(
+          videoData.videoType,
+          videoData.videoHash,
+          videoData.videoId,
+          videoData.urlParams,
+          videoData.scriptUrl
+        );
+        
+        // Очищаем URL
+        const cleanUrl = result.url.replace('https:', '');
+        const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
+        
+        const finalResult = {
+          url: baseUrl,
+          maxQuality: result.maxQuality
+        };
+        
+        // Кэшируем с коротким TTL
+        this.setCached(cacheKey, finalResult, KodikAPIOptimized.CACHE_CONFIG.VIDEO_URL_TTL);
+        
+        console.log(`✅ Video URL obtained for ${id} ep${episode}`);
+        return finalResult;
+        
+      } catch (error) {
+        console.error(`❌ Failed to get video URL for ${id} ep${episode}:`, error);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Получает информацию о медиа с кэшированием
+   */
+  async getInfo(id: string, idType: IDType): Promise<{
+    series_count: number;
+    translations: Array<{ id: string; type: string; name: string; }>;
+  }> {
+    const cacheKey = `info_${id}_${idType}`;
+    
+    const cached = this.getCached<any>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
+    return this.executeWithPool(cacheKey, async () => {
+      try {
+        const link = await this.getLinkToInfo(id, idType);
+        const response = await fetch(link);
+        const html = await response.text();
+        
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, 'text/html');
+        
+        let seriesCount = 0;
+        let translations: any[] = [];
+        
+        if (this.isSerial(link)) {
+          // Для сериалов
+          const seriesBox = doc.querySelector('.serial-series-box select');
+          if (seriesBox) {
+            seriesCount = seriesBox.querySelectorAll('option').length;
+          }
+          
+          const translationsBox = doc.querySelector('.serial-translations-box select');
+          translations = this.generateTranslationsDict(translationsBox);
+        } else if (this.isVideo(link)) {
+          // Для фильмов
+          seriesCount = 0;
+          
+          const translationsBox = doc.querySelector('.movie-translations-box select');
+          translations = this.generateTranslationsDict(translationsBox);
+        }
+        
+        const result = {
+          series_count: seriesCount,
+          translations
+        };
+        
+        // Кэшируем результат
+        this.setCached(cacheKey, result, KodikAPIOptimized.CACHE_CONFIG.API_RESPONSE_TTL);
+        
+        return result;
+      } catch (error) {
+        console.error('Error getting info:', error);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Получает список переводов
    */
   async getTranslations(id: string, idType: IDType): Promise<any[]> {
     const infoData = await this.getInfo(id, idType);
@@ -166,59 +700,7 @@ export class KodikAPI {
     return infoData.series_count;
   }
 
-  /**
-   * Получает информацию о медиа (переводы и количество серий)
-   * Портирован из get_info в Python
-   */
-  async getInfo(id: string, idType: IDType): Promise<{
-    series_count: number;
-    translations: Array<{
-      id: string;
-      type: string;
-      name: string;
-    }>;
-  }> {
-    try {
-      const link = await this.getLinkToInfo(id, idType);
-      const response = await fetch(link);
-      const html = await response.text();
-      
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      
-      let seriesCount = 0;
-      let translations: any[] = [];
-      
-      if (this.isSerial(link)) {
-        // Для сериалов
-        const seriesBox = doc.querySelector('.serial-series-box select');
-        if (seriesBox) {
-          seriesCount = seriesBox.querySelectorAll('option').length;
-        }
-        
-        const translationsBox = doc.querySelector('.serial-translations-box select');
-        translations = this.generateTranslationsDict(translationsBox);
-      } else if (this.isVideo(link)) {
-        // Для фильмов
-        seriesCount = 0;
-        
-        const translationsBox = doc.querySelector('.movie-translations-box select');
-        translations = this.generateTranslationsDict(translationsBox);
-      }
-      
-      return {
-        series_count: seriesCount,
-        translations
-      };
-    } catch (error) {
-      console.error('Error getting info:', error);
-      throw error;
-    }
-  }
-
-  /**
-   * Получает ссылку на embed страницу
-   */
+  // Остальные методы остаются без изменений для совместимости
   private async getLinkToInfo(id: string, idType: IDType): Promise<string> {
     if (!this.token) {
       await this.getToken();
@@ -249,25 +731,16 @@ export class KodikAPI {
     return 'https:' + data.link;
   }
 
-  /**
-   * Проверяет является ли ссылка сериалом
-   */
   private isSerial(url: string): boolean {
     const infoIndex = url.indexOf('.info/');
     return infoIndex !== -1 && url[infoIndex + 6] === 's';
   }
 
-  /**
-   * Проверяет является ли ссылка видео
-   */
   private isVideo(url: string): boolean {
     const infoIndex = url.indexOf('.info/');
     return infoIndex !== -1 && url[infoIndex + 6] === 'v';
   }
 
-  /**
-   * Генерирует словарь переводов из DOM элемента
-   */
   private generateTranslationsDict(translationsElement: Element | null): any[] {
     if (!translationsElement) {
       return [{ id: '0', type: 'Неизвестно', name: 'Неизвестно' }];
@@ -298,110 +771,34 @@ export class KodikAPI {
   }
 
   /**
-   * Получает прямую ссылку на видео
-   * Портирован из get_link в Python
+   * Очищает все кэши (для отладки)
    */
-  async getVideoUrl(
-    id: string, 
-    idType: IDType, 
-    episode: number, 
-    translationId: string
-  ): Promise<{ url: string; maxQuality: number }> {
-    try {
-      const link = await this.getLinkToInfo(id, idType);
-      let embedUrl: string;
-      
-      if (episode > 0 && translationId !== '0') {
-        // Для сериала с известной озвучкой
-        const response = await fetch(link);
-        const html = await response.text();
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        
-        const container = doc.querySelector('.serial-translations-box select');
-        if (!container) throw new Error('Translations container not found');
-        
-        let mediaHash: string | null = null;
-        let mediaId: string | null = null;
-        
-        const options = container.querySelectorAll('option');
-        for (let i = 0; i < options.length; i++) {
-          const option = options[i];
-          if (option.getAttribute('data-id') === translationId) {
-            mediaHash = option.getAttribute('data-media-hash');
-            mediaId = option.getAttribute('data-media-id');
-            break;
-          }
-        }
-        
-        if (!mediaHash || !mediaId) {
-          throw new Error('Media hash/id not found for translation');
-        }
-        
-        embedUrl = `https://kodik.info/serial/${mediaId}/${mediaHash}/720p?min_age=16&first_url=false&season=1&episode=${episode}`;
-      } else if (translationId !== '0' && episode === 0) {
-        // Для фильма с переводом
-        const response = await fetch(link);
-        const html = await response.text();
-        const doc = new DOMParser().parseFromString(html, 'text/html');
-        
-        const container = doc.querySelector('.movie-translations-box select');
-        if (!container) throw new Error('Translations container not found');
-        
-        let mediaHash: string | null = null;
-        let mediaId: string | null = null;
-        
-        const options = container.querySelectorAll('option');
-        for (let i = 0; i < options.length; i++) {
-          const option = options[i];
-          if (option.getAttribute('data-id') === translationId) {
-            mediaHash = option.getAttribute('data-media-hash');
-            mediaId = option.getAttribute('data-media-id');
-            break;
-          }
-        }
-        
-        if (!mediaHash || !mediaId) {
-          throw new Error('Media hash/id not found for translation');
-        }
-        
-        embedUrl = `https://kodik.info/video/${mediaId}/${mediaHash}/720p?min_age=16&first_url=false&season=1&episode=0`;
-      } else {
-        embedUrl = link;
-      }
-      
-      // Получаем HTML страницы плеера
-      const playerResponse = await fetch(embedUrl);
-      const playerHtml = await playerResponse.text();
-      
-      // Извлекаем данные из страницы
-      const videoData = extractVideoDataFromPage(playerHtml);
-      if (!videoData) {
-        throw new Error('Failed to extract video data');
-      }
-      
-      // Получаем ссылки на видео
-      const result = await getVideoLinks(
-        videoData.videoType,
-        videoData.videoHash,
-        videoData.videoId,
-        videoData.urlParams,
-        videoData.scriptUrl
-      );
-      
-      // Убираем протокол из URL
-      const cleanUrl = result.url.replace('https:', '');
-      const baseUrl = cleanUrl.substring(0, cleanUrl.lastIndexOf('/') + 1);
-      
-      return {
-        url: baseUrl,
-        maxQuality: result.maxQuality
-      };
-    } catch (error) {
-      console.error('Error getting video URL:', error);
-      throw error;
-    }
+  clearCache(): void {
+    KodikAPIOptimized.memoryCache.clear();
+    KodikAPIOptimized.tokenCache = null;
+    KodikAPIOptimized.requestPool.clear();
+    console.log('🗑️ All caches cleared');
+  }
+
+  /**
+   * Получает статистику кэша
+   */
+  getCacheStats(): {
+    memoryEntries: number;
+    tokenCached: boolean;
+    activeRequests: number;
+  } {
+    return {
+      memoryEntries: KodikAPIOptimized.memoryCache.size,
+      tokenCached: KodikAPIOptimized.tokenCache !== null,
+      activeRequests: KodikAPIOptimized.requestPool.size
+    };
   }
 }
 
-// Создаем глобальный экземпляр API клиента
-export const kodikAPI = new KodikAPI();
+// Создаем глобальный экземпляр оптимизированного API клиента
+export const kodikAPIOptimized = new KodikAPIOptimized();
+
+// Экспортируем для обратной совместимости
+export { KodikAPIOptimized as KodikAPI };
+export const kodikAPI = kodikAPIOptimized; // Алиас для старого кода
