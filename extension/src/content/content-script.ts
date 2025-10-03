@@ -284,26 +284,30 @@ class AnimeStarsKodikOptimizer {
     try {
       console.log('🎬 Starting optimized player initialization...');
       
-      // Параллельно запускаем критические операции
-      const translationsPromise = this.parseTranslationsAsync();
-      const playerRemovalPromise = this.removeOriginalPlayerAsync();
+      // ЭТАП 1: АНАЛИЗ И СБОР ДАННЫХ (НЕ УДАЛЯЕМ НИЧЕГО!)
+      console.log('📊 Phase 1: Analyzing existing player data...');
       
-      // Ждем парсинг переводов
-      await translationsPromise;
+      // Сначала парсим переводы
+      await this.parseTranslationsAsync();
       
       if (this.translations.length === 0) {
         console.log('❌ No translations found');
         return;
       }
 
-      // Параллельно извлекаем информацию об аниме и удаляем плеер
-      const [, ] = await Promise.allSettled([
-        this.extractAnimeInfoAsync(),
-        playerRemovalPromise
-      ]);
+      // Затем анализируем данные об эпизодах ИЗ СУЩЕСТВУЮЩЕГО iframe
+      await this.analyzeEpisodesFromExistingPlayer();
+      
+      // Извлекаем информацию об аниме
+      await this.extractAnimeInfoAsync();
 
-      // Создаем плеер
+      // ЭТАП 2: СОЗДАНИЕ НОВОГО ПЛЕЕРА
+      console.log('🎮 Phase 2: Creating custom player...');
       await this.createCustomPlayer();
+
+      // ЭТАП 3: ЗАМЕНА СТАРОГО ПЛЕЕРА (ТОЛЬКО ПОСЛЕ СОЗДАНИЯ НОВОГО!)
+      console.log('🔄 Phase 3: Replacing original player...');
+      await this.removeOriginalPlayerAsync();
 
       console.log('✅ AnimeStars Kodik Optimizer initialized successfully');
     } catch (error) {
@@ -461,8 +465,11 @@ class AnimeStarsKodikOptimizer {
     // Создаем селектор переводов
     this.createTranslationSelector();
 
-    // Загружаем эпизоды для текущего перевода
-    await this.loadEpisodes();
+    // Эпизоды уже должны быть загружены в analyzeEpisodesFromExistingPlayer()
+    if (this.episodes.length === 0) {
+      console.warn('⚠️ No episodes loaded, loading them now as fallback...');
+      await this.loadEpisodes();
+    }
 
     // Создаем селектор эпизодов
     this.createEpisodeSelector();
@@ -562,7 +569,272 @@ class AnimeStarsKodikOptimizer {
   }
 
   /**
-   * Загружает список эпизодов для текущего перевода
+   * Анализирует данные об эпизодах из существующего iframe плеера
+   */
+  private async analyzeEpisodesFromExistingPlayer(): Promise<void> {
+    console.log('🔍 Analyzing episodes from existing player iframe...');
+    
+    if (!this.currentTranslation) {
+      console.warn('⚠️ No current translation selected');
+      return;
+    }
+
+    this.episodes = [];
+    let maxEpisode = 0;
+
+    try {
+      // Ищем существующий iframe Kodik
+      const kodikIframes = document.querySelectorAll('iframe[src*="kodik"]');
+      console.log('🔍 Found Kodik iframes:', kodikIframes.length);
+
+      // Пытаемся получить данные из iframe
+      for (let i = 0; i < kodikIframes.length; i++) {
+        const iframe = kodikIframes[i] as HTMLIFrameElement;
+        try {
+          console.log('🔍 Trying to access iframe content:', iframe.src);
+          
+          // Пытаемся получить доступ к содержимому iframe
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (iframeDoc) {
+            const html = iframeDoc.documentElement.outerHTML;
+            console.log('✅ Successfully accessed iframe content, length:', html.length);
+            
+            maxEpisode = await this.parseEpisodesFromHTML(html);
+            if (maxEpisode > 0) {
+              console.log('✅ Found episodes from iframe:', maxEpisode);
+              break;
+            }
+          }
+        } catch (e) {
+          console.log('⚠️ Cannot access iframe content due to CORS, trying alternative methods');
+        }
+      }
+
+      // Если не удалось получить из iframe, пытаемся через background script
+      if (maxEpisode === 0) {
+        console.log('🔄 Trying to fetch episode data via background script...');
+        try {
+          const response = await this.fetchViaBackground(this.currentTranslation.kodikUrl);
+          if (response.success && response.data) {
+            console.log('✅ Fetched data via background script, length:', response.data.length);
+            maxEpisode = await this.parseEpisodesFromHTML(response.data);
+          }
+        } catch (error) {
+          console.warn('⚠️ Background fetch failed:', error);
+        }
+      }
+
+      // Альтернативный поиск на текущей странице
+      if (maxEpisode === 0) {
+        console.log('🔍 Trying to detect episodes from page context...');
+        
+        // Паттерн 1: Информация о сериях в блоке .pcoln__series-count
+        const seriesCountElement = document.querySelector('.page__ser, .pcoln__series-count .page__ser');
+        if (seriesCountElement) {
+          const seriesText = seriesCountElement.textContent || '';
+          console.log('🔍 Found series count text:', seriesText);
+          
+          // Ищем паттерны типа "Серий: 1-44 из ?" или "Episodes: 1-44"
+          const seriesPatterns = [
+            /Серий:\s*\d+-(\d+)/i,
+            /Episodes:\s*\d+-(\d+)/i,
+            /Серий:\s*(\d+)/i,
+            /Episodes:\s*(\d+)/i,
+            /1-(\d+)\s*из/i,
+            /(\d+)\s*серий/i
+          ];
+          
+          for (const pattern of seriesPatterns) {
+            const match = seriesText.match(pattern);
+            if (match) {
+              const foundEpisodes = parseInt(match[1]);
+              if (foundEpisodes > 0) {
+                maxEpisode = foundEpisodes;
+                console.log('📺 Found episodes from series count text:', maxEpisode, 'pattern:', pattern.source);
+                break;
+              }
+            }
+          }
+        }
+        
+        // Паттерн 2: Селекторы эпизодов
+        if (maxEpisode === 0) {
+          const episodeSelectors = [
+            '.series-options select option',
+            '.episode-list .episode',
+            '[data-episode]',
+            '.episode-selector option',
+            'select[name="episode"] option',
+            '.season-1 option'
+          ];
+          
+          for (const selector of episodeSelectors) {
+            const elements = document.querySelectorAll(selector);
+            if (elements.length > 1) {
+              const episodeNumbers = Array.from(elements).map(el => {
+                const value = el.getAttribute('value') || 
+                             el.getAttribute('data-episode') || 
+                             el.textContent?.match(/\d+/)?.[0];
+                return value ? parseInt(value) : 0;
+              }).filter(n => n > 0);
+              
+              if (episodeNumbers.length > 0) {
+                maxEpisode = Math.max(...episodeNumbers);
+                console.log('📺 Found episodes from page selectors:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+                break;
+              }
+            }
+          }
+        }
+        
+        // Паттерн 3: Поиск в мета-информации страницы
+        if (maxEpisode === 0) {
+          const metaSelectors = [
+            'meta[name="episodes"]',
+            'meta[property="episodes"]',
+            'meta[name="anime:episodes"]',
+            '[data-episodes]'
+          ];
+          
+          for (const selector of metaSelectors) {
+            const element = document.querySelector(selector);
+            if (element) {
+              const episodes = element.getAttribute('content') || 
+                             element.getAttribute('data-episodes') || 
+                             element.getAttribute('value');
+              if (episodes) {
+                const parsedEpisodes = parseInt(episodes);
+                if (parsedEpisodes > 0) {
+                  maxEpisode = parsedEpisodes;
+                  console.log('📺 Found episodes from meta data:', maxEpisode);
+                  break;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      // Создаем массив эпизодов
+      if (maxEpisode > 0) {
+        console.log('📺 Creating episode list with', maxEpisode, 'episodes');
+        for (let i = 1; i <= maxEpisode; i++) {
+          this.episodes.push({
+            number: i,
+            title: `Серия ${i}`
+          });
+        }
+      } else {
+        console.log('📺 No episodes detected, creating single episode');
+        this.episodes.push({
+          number: 1,
+          title: 'Серия 1'
+        });
+      }
+
+      console.log('📺 Final episodes analysis result:', this.episodes.length, 'episodes');
+
+    } catch (error) {
+      console.error('❌ Error analyzing episodes:', error);
+      // Fallback: создаем хотя бы один эпизод
+      this.episodes = [{
+        number: 1,
+        title: 'Серия 1'
+      }];
+    }
+  }
+
+  /**
+   * Парсит количество эпизодов из HTML
+   */
+  private async parseEpisodesFromHTML(html: string): Promise<number> {
+    let maxEpisode = 0;
+
+    // Паттерн 1: Ищем option элементы с data-id и data-hash (точный формат Kodik)
+    const kodikOptionPattern = /<option[^>]*value="(\d+)"[^>]*data-id="[^"]*"[^>]*data-hash="[^"]*"[^>]*data-title="(\d+)\s*серия"[^>]*>/gi;
+    const kodikOptionMatches = [...html.matchAll(kodikOptionPattern)];
+    if (kodikOptionMatches.length > 0) {
+      const episodeNumbers = kodikOptionMatches.map(match => parseInt(match[1]));
+      maxEpisode = Math.max(...episodeNumbers);
+      console.log('📺 Found episodes from Kodik option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+      return maxEpisode;
+    }
+
+    // Паттерн 2: Альтернативный поиск option элементов с любым форматом серии
+    const optionPattern = /<option[^>]*value="(\d+)"[^>]*>[\s\S]*?(\d+)\s*серия[\s\S]*?<\/option>/gi;
+    const optionMatches = [...html.matchAll(optionPattern)];
+    if (optionMatches.length > 0) {
+      const episodeNumbers = optionMatches.map(match => parseInt(match[1]));
+      maxEpisode = Math.max(...episodeNumbers);
+      console.log('📺 Found episodes from generic option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+      return maxEpisode;
+    }
+
+    // Паттерн 3: Ищем любые option элементы с числовыми значениями
+    const allOptionPattern = /<option[^>]*value="(\d+)"[^>]*>/gi;
+    const allOptionMatches = [...html.matchAll(allOptionPattern)];
+    if (allOptionMatches.length > 1) { // больше 1, чтобы исключить единичные селекторы
+      const episodeNumbers = allOptionMatches.map(match => parseInt(match[1]));
+      maxEpisode = Math.max(...episodeNumbers);
+      console.log('📺 Found episodes from all option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+      return maxEpisode;
+    }
+
+    // Паттерн 4: Ищем в переменных JavaScript
+    const jsPatterns = [
+      /episodes?\s*[=:]\s*(\d+)/i,
+      /episodeCount\s*[=:]\s*(\d+)/i,
+      /totalEpisodes?\s*[=:]\s*(\d+)/i,
+      /var\s+episodes\s*=\s*(\d+)/i
+    ];
+    
+    for (const pattern of jsPatterns) {
+      const match = html.match(pattern);
+      if (match) {
+        maxEpisode = parseInt(match[1]);
+        console.log('📺 Found episodes from JS variables:', maxEpisode);
+        return maxEpisode;
+      }
+    }
+
+    // Паттерн 5: Ищем кнопки переключения эпизодов
+    const buttonPattern = /data-episode[^=]*=["'](\d+)["']/gi;
+    const buttonMatches = [...html.matchAll(buttonPattern)];
+    if (buttonMatches.length > 0) {
+      const episodeNumbers = buttonMatches.map(match => parseInt(match[1]));
+      maxEpisode = Math.max(...episodeNumbers);
+      console.log('📺 Found episodes from button data attributes:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+      return maxEpisode;
+    }
+
+    // Паттерн 6: Ищем информацию о сериях в DOM (для случаев когда HTML содержит полную страницу)
+    const seriesInfoPatterns = [
+      /Серий:\s*\d+-(\d+)/i,
+      /Episodes:\s*\d+-(\d+)/i,
+      /Серий:\s*(\d+)/i,
+      /Episodes:\s*(\d+)/i,
+      /1-(\d+)\s*из/i,
+      /(\d+)\s*серий/i,
+      /class="page__ser"[^>]*>[\s\S]*?(\d+)[\s\S]*?серий/i
+    ];
+    
+    for (const pattern of seriesInfoPatterns) {
+      const match = html.match(pattern);
+      if (match) {
+        const foundEpisodes = parseInt(match[1]);
+        if (foundEpisodes > 0) {
+          maxEpisode = foundEpisodes;
+          console.log('📺 Found episodes from series info pattern:', maxEpisode);
+          return maxEpisode;
+        }
+      }
+    }
+
+    return 0;
+  }
+
+  /**
+   * Загружает список эпизодов для текущего перевода (старый метод - теперь не используется в начальной фазе)
    */
   private async loadEpisodes() {
     if (!this.currentTranslation) return;
@@ -570,70 +842,173 @@ class AnimeStarsKodikOptimizer {
     console.log('📺 Loading episodes for:', this.currentTranslation.title);
 
     try {
-      // Получаем реальное количество серий из Kodik
-      const response = await this.fetchViaBackground(this.currentTranslation.kodikUrl);
-      if (!response.success) {
-        throw new Error('Failed to fetch episode data');
+      // Сначала попытаемся получить данные из Kodik
+      let html: string | null = null;
+      
+      try {
+        const response = await this.fetchViaBackground(this.currentTranslation.kodikUrl);
+        if (response.success && response.data) {
+          html = response.data;
+          console.log('✅ Fetched episodes data via background script');
+        }
+      } catch (error) {
+        console.log('⚠️ Background fetch failed, will try alternative methods:', error);
       }
 
-      const html = response.data;
+      // Fallback: используем данные которые уже есть при загрузке видео
       if (!html) {
-        throw new Error('Empty HTML response');
+        console.log('🔄 Trying to extract episode data from current video loading...');
+        // Ждем немного, чтобы дать видео загрузиться и получить HTML
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        // Попробуем найти iframe с данными Kodik
+        const kodikIframes = document.querySelectorAll('iframe[src*="kodik"]');
+        for (let i = 0; i < kodikIframes.length; i++) {
+          const iframe = kodikIframes[i] as HTMLIFrameElement;
+          try {
+            const iframeDoc = iframe.contentDocument;
+            if (iframeDoc) {
+              html = iframeDoc.documentElement.outerHTML;
+              console.log('✅ Extracted HTML from iframe');
+              break;
+            }
+          } catch (e) {
+            // CORS блокирует доступ к iframe - это нормально
+            console.log('⚠️ Cannot access iframe content due to CORS');
+          }
+        }
       }
-      
-      this.episodes = [];
 
-      // Ищем в HTML количество серий или селектор серий
-      console.log('🔍 Searching for episodes in HTML...');
-      
-      // Паттерн 1: data-episode="X"
-      const episodeMatches = html.match(/data-episode="(\d+)"/g);
-      console.log('🔍 data-episode matches:', episodeMatches);
-      
-      // Паттерн 2: episode=X в URL или параметрах
-      const urlEpisodeMatches = html.match(/episode=(\d+)/g);
-      console.log('🔍 URL episode matches:', urlEpisodeMatches);
-      
-      // Паттерн 3: Селекторы серий в select options
-      const selectEpisodeMatches = html.match(/<option[^>]*value="(\d+)"[^>]*>(\d+)/g);
-      console.log('🔍 Select option matches:', selectEpisodeMatches);
-      
-      // Паттерн 4: Кнопки серий
-      const buttonEpisodeMatches = html.match(/data-season-episode="(\d+)"/g);
-      console.log('🔍 Button episode matches:', buttonEpisodeMatches);
-      
+      // Инициализируем массив эпизодов
+      this.episodes = [];
       let maxEpisode = 0;
-      
-      if (episodeMatches && episodeMatches.length > 0) {
-        const episodeNumbers = episodeMatches.map((match: string) => {
-          const numberMatch = match.match(/data-episode="(\d+)"/);
-          return numberMatch ? parseInt(numberMatch[1]) : 0;
-        });
-        maxEpisode = Math.max(...episodeNumbers);
-        console.log('📺 Found max episode from data-episode:', maxEpisode);
-      } else if (urlEpisodeMatches && urlEpisodeMatches.length > 0) {
-        const episodeNumbers = urlEpisodeMatches.map((match: string) => {
-          const numberMatch = match.match(/episode=(\d+)/);
-          return numberMatch ? parseInt(numberMatch[1]) : 0;
-        });
-        maxEpisode = Math.max(...episodeNumbers);
-        console.log('📺 Found max episode from URL params:', maxEpisode);
-      } else if (selectEpisodeMatches && selectEpisodeMatches.length > 0) {
-        const episodeNumbers = selectEpisodeMatches.map((match: string) => {
-          const numberMatch = match.match(/value="(\d+)"/);
-          return numberMatch ? parseInt(numberMatch[1]) : 0;
-        });
-        maxEpisode = Math.max(...episodeNumbers);
-        console.log('📺 Found max episode from select options:', maxEpisode);
-      } else if (buttonEpisodeMatches && buttonEpisodeMatches.length > 0) {
-        const episodeNumbers = buttonEpisodeMatches.map((match: string) => {
-          const numberMatch = match.match(/data-season-episode="(\d+)"/);
-          return numberMatch ? parseInt(numberMatch[1]) : 0;
-        });
-        maxEpisode = Math.max(...episodeNumbers);
-        console.log('📺 Found max episode from button episodes:', maxEpisode);
+
+      if (html) {
+        console.log('🔍 Searching for episodes in HTML...');
+        
+        // Паттерн 1: Ищем option элементы с data-id и data-hash (точный формат Kodik)
+        const kodikOptionPattern = /<option[^>]*value="(\d+)"[^>]*data-id="[^"]*"[^>]*data-hash="[^"]*"[^>]*data-title="(\d+)\s*серия"[^>]*>/gi;
+        const kodikOptionMatches = [...html.matchAll(kodikOptionPattern)];
+        if (kodikOptionMatches.length > 0) {
+          const episodeNumbers = kodikOptionMatches.map(match => parseInt(match[1]));
+          maxEpisode = Math.max(...episodeNumbers);
+          console.log('📺 Found episodes from Kodik option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+        }
+
+        // Паттерн 2: Альтернативный поиск option элементов с любым форматом серии
+        if (!maxEpisode) {
+          const optionPattern = /<option[^>]*value="(\d+)"[^>]*>[\s\S]*?(\d+)\s*серия[\s\S]*?<\/option>/gi;
+          const optionMatches = [...html.matchAll(optionPattern)];
+          if (optionMatches.length > 0) {
+            const episodeNumbers = optionMatches.map(match => parseInt(match[1]));
+            maxEpisode = Math.max(...episodeNumbers);
+            console.log('📺 Found episodes from generic option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+          }
+        }
+
+        // Паттерн 3: Ищем любые option элементы с числовыми значениями
+        if (!maxEpisode) {
+          const allOptionPattern = /<option[^>]*value="(\d+)"[^>]*>/gi;
+          const allOptionMatches = [...html.matchAll(allOptionPattern)];
+          if (allOptionMatches.length > 1) { // больше 1, чтобы исключить единичные селекторы
+            const episodeNumbers = allOptionMatches.map(match => parseInt(match[1]));
+            maxEpisode = Math.max(...episodeNumbers);
+            console.log('📺 Found episodes from all option tags:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+          }
+        }
+
+        // Паттерн 4: Ищем в переменных JavaScript
+        if (!maxEpisode) {
+          const jsPatterns = [
+            /episodes?\s*[=:]\s*(\d+)/i,
+            /episodeCount\s*[=:]\s*(\d+)/i,
+            /totalEpisodes?\s*[=:]\s*(\d+)/i,
+            /var\s+episodes\s*=\s*(\d+)/i
+          ];
+          
+          for (const pattern of jsPatterns) {
+            const match = html.match(pattern);
+            if (match) {
+              maxEpisode = parseInt(match[1]);
+              console.log('📺 Found episodes from JS variables:', maxEpisode);
+              break;
+            }
+          }
+        }
+
+        // Паттерн 5: Ищем кнопки переключения эпизодов
+        if (!maxEpisode) {
+          const buttonPattern = /data-episode[^=]*=["'](\d+)["']/gi;
+          const buttonMatches = [...html.matchAll(buttonPattern)];
+          if (buttonMatches.length > 0) {
+            const episodeNumbers = buttonMatches.map(match => parseInt(match[1]));
+            maxEpisode = Math.max(...episodeNumbers);
+            console.log('📺 Found episodes from button data attributes:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+          }
+        }
+      }
+
+      // Fallback: попытка получить количество эпизодов из URL или других источников
+      if (!maxEpisode) {
+        console.log('🔍 Trying to detect episodes from page context...');
+        
+        // Паттерн 1: Информация о сериях в блоке .pcoln__series-count
+        const seriesCountElement = document.querySelector('.page__ser, .pcoln__series-count .page__ser');
+        if (seriesCountElement) {
+          const seriesText = seriesCountElement.textContent || '';
+          console.log('🔍 Found series count text:', seriesText);
+          
+          // Ищем паттерны типа "Серий: 1-44 из ?" или "Episodes: 1-44"
+          const seriesPatterns = [
+            /Серий:\s*\d+-(\d+)/i,
+            /Episodes:\s*\d+-(\d+)/i,
+            /Серий:\s*(\d+)/i,
+            /Episodes:\s*(\d+)/i,
+            /1-(\d+)\s*из/i,
+            /(\d+)\s*серий/i
+          ];
+          
+          for (const pattern of seriesPatterns) {
+            const match = seriesText.match(pattern);
+            if (match) {
+              const foundEpisodes = parseInt(match[1]);
+              if (foundEpisodes > 0) {
+                maxEpisode = foundEpisodes;
+                console.log('📺 Found episodes from series count text:', maxEpisode, 'pattern:', pattern.source);
+                break;
+              }
+            }
+          }
+        }
+        
+        // Паттерн 2: Попробуем найти информацию на странице аниме
+        if (!maxEpisode) {
+          const episodeSelectors = [
+            '.series-options select option',
+            '.episode-list .episode',
+            '[data-episode]',
+            '.episode-selector option'
+          ];
+          
+          for (const selector of episodeSelectors) {
+            const elements = document.querySelectorAll(selector);
+            if (elements.length > 1) {
+              const episodeNumbers = Array.from(elements).map(el => {
+                const value = el.getAttribute('value') || el.getAttribute('data-episode') || el.textContent?.match(/\d+/)?.[0];
+                return value ? parseInt(value) : 0;
+              }).filter(n => n > 0);
+              
+              if (episodeNumbers.length > 0) {
+                maxEpisode = Math.max(...episodeNumbers);
+                console.log('📺 Found episodes from page selectors:', episodeNumbers.length, 'episodes, max:', maxEpisode);
+                break;
+              }
+            }
+          }
+        }
       }
       
+      // Создаем массив эпизодов
       if (maxEpisode > 0) {
         console.log('📺 Using detected episode count:', maxEpisode);
         for (let i = 1; i <= maxEpisode; i++) {
@@ -643,28 +1018,25 @@ class AnimeStarsKodikOptimizer {
           });
         }
       } else {
-        // Fallback: пробуем найти другие паттерны для определения количества серий
-        const seasonInfoMatch = html.match(/серия[^\d]*(\d+)/i) || html.match(/episode[^\d]*(\d+)/i);
-        const episodeCount = seasonInfoMatch ? parseInt(seasonInfoMatch[1]) : 1;
-        
-        console.log('📺 Using fallback episode count:', episodeCount);
-        
-        for (let i = 1; i <= episodeCount; i++) {
-          this.episodes.push({
-            number: i,
-            title: `Серия ${i}`
-          });
-        }
+        // Fallback: создаем хотя бы один эпизод для навигации
+        console.log('📺 No episodes detected, creating single episode');
+        this.episodes.push({
+          number: 1,
+          title: 'Серия 1'
+        });
       }
 
-      console.log('📺 Created episodes:', this.episodes.length);
+      console.log('📺 Final episodes array:', this.episodes);
+
     } catch (error) {
       console.error('❌ Failed to load episodes:', error);
-      // Создаем одну серию по умолчанию
-      this.episodes = [{ number: 1, title: 'Серия 1' }];
       console.log('📺 Using single default episode');
+      this.episodes = [{
+        number: 1,
+        title: 'Серия 1'
+      }];
     }
-    
+
     console.log('📺 Final episodes array:', this.episodes);
   }
 
@@ -680,8 +1052,9 @@ class AnimeStarsKodikOptimizer {
       return;
     }
     
-    if (this.episodes.length <= 1) {
-      console.log('⚠️ Only 1 or 0 episodes, skipping episode selector');
+    // Показываем селектор эпизодов даже если эпизод один, для лучшего UX
+    if (this.episodes.length === 0) {
+      console.log('⚠️ No episodes data, skipping episode selector');
       return;
     }
 
@@ -716,11 +1089,20 @@ class AnimeStarsKodikOptimizer {
         transition: background 0.2s;
       `;
 
-      if (button) {
-        button.addEventListener('click', () => {
-          this.switchEpisode(episode.number);
-        });
-      }
+      // Безопасно добавляем обработчик события
+      button.addEventListener('click', () => {
+        this.switchEpisode(episode.number);
+      });
+
+      button.addEventListener('mouseenter', () => {
+        if (this.currentEpisode !== episode.number) {
+          button.style.background = '#555';
+        }
+      });
+
+      button.addEventListener('mouseleave', () => {
+        button.style.background = this.currentEpisode === episode.number ? '#007bff' : '#444';
+      });
 
       episodeBar.appendChild(button);
     });
@@ -1246,6 +1628,25 @@ class AnimeStarsKodikOptimizer {
       </svg>
     `);
 
+    // Кнопка предыдущего эпизода
+    const prevEpisodeButton = this.createControlButton('prev-episode', `
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/>
+      </svg>
+    `);
+    prevEpisodeButton.title = 'Предыдущий эпизод';
+
+    // Кнопка следующего эпизода
+    const nextEpisodeButton = this.createControlButton('next-episode', `
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
+      </svg>
+    `);
+    nextEpisodeButton.title = 'Следующий эпизод';
+
+    // Обновляем видимость кнопок навигации
+    this.updateNavigationButtons(prevEpisodeButton, nextEpisodeButton);
+
     // Информация о времени
     const timeInfo = document.createElement('span');
     timeInfo.style.cssText = `
@@ -1271,8 +1672,7 @@ class AnimeStarsKodikOptimizer {
 
     const volumeButton = this.createControlButton('volume', `
       <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
-      </svg>
+        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
     `);
 
     const volumeSlider = document.createElement('input');
@@ -1334,6 +1734,8 @@ class AnimeStarsKodikOptimizer {
     volumeContainer.appendChild(volumeSlider);
 
     controlsRow.appendChild(playButton);
+    controlsRow.appendChild(prevEpisodeButton);
+    controlsRow.appendChild(nextEpisodeButton);
     controlsRow.appendChild(timeInfo);
     controlsRow.appendChild(spacer);
     controlsRow.appendChild(volumeContainer);
@@ -1349,7 +1751,7 @@ class AnimeStarsKodikOptimizer {
     this.bufferedBar = bufferedBar;
 
     // Добавляем обработчики
-    this.setupControlsEvents(playButton, timeInfo, progressContainer, volumeButton, fullscreenButton);
+    this.setupControlsEvents(playButton, timeInfo, progressContainer, volumeButton, fullscreenButton, prevEpisodeButton, nextEpisodeButton);
   }
 
   /**
@@ -1664,6 +2066,22 @@ class AnimeStarsKodikOptimizer {
           e.preventDefault();
           this.toggleMute();
           break;
+        case 'KeyN':
+          e.preventDefault();
+          this.goToNextEpisode();
+          break;
+        case 'KeyP':
+          e.preventDefault();
+          this.goToPreviousEpisode();
+          break;
+        case 'PageUp':
+          e.preventDefault();
+          this.goToPreviousEpisode();
+          break;
+        case 'PageDown':
+          e.preventDefault();
+          this.goToNextEpisode();
+          break;
         case 'Escape':
           // Выход из полноэкранного режима
           if (document.fullscreenElement) {
@@ -1779,12 +2197,27 @@ class AnimeStarsKodikOptimizer {
     timeInfo: HTMLElement, 
     progressContainer: HTMLElement, 
     volumeButton: HTMLElement, 
-    fullscreenButton: HTMLElement
+    fullscreenButton: HTMLElement,
+    prevEpisodeButton: HTMLElement,
+    nextEpisodeButton: HTMLElement
   ) {
     // Кнопка воспроизведения
     if (playButton) {
       playButton.addEventListener('click', () => {
         this.togglePlayPause();
+      });
+    }
+
+    // Кнопки навигации по эпизодам
+    if (prevEpisodeButton) {
+      prevEpisodeButton.addEventListener('click', () => {
+        this.goToPreviousEpisode();
+      });
+    }
+
+    if (nextEpisodeButton) {
+      nextEpisodeButton.addEventListener('click', () => {
+        this.goToNextEpisode();
       });
     }
 
@@ -1819,6 +2252,9 @@ class AnimeStarsKodikOptimizer {
         this.toggleFullscreen();
       });
     }
+
+    // Обновляем видимость кнопок навигации
+    this.updateNavigationButtons(prevEpisodeButton, nextEpisodeButton);
   }
 
   /**
@@ -2318,6 +2754,9 @@ class AnimeStarsKodikOptimizer {
 
     // Загружаем новое видео (прогресс НЕ восстановится, так как isFirstLoad = false)
     await this.loadVideo();
+
+    // Обновляем кнопки навигации
+    this.updateNavigationButtonsVisibility();
   }
 
   /**
@@ -2350,6 +2789,56 @@ class AnimeStarsKodikOptimizer {
 
     // Загружаем новое видео (прогресс НЕ восстановится, так как isFirstLoad = false)
     await this.loadVideo();
+
+    // Обновляем кнопки навигации
+    this.updateNavigationButtonsVisibility();
+  }
+
+  /**
+   * Переходит к предыдущему эпизоду
+   */
+  private goToPreviousEpisode() {
+    if (this.currentEpisode > 1) {
+      this.switchEpisode(this.currentEpisode - 1);
+    }
+  }
+
+  /**
+   * Переходит к следующему эпизоду
+   */
+  private goToNextEpisode() {
+    if (this.currentEpisode < this.episodes.length) {
+      this.switchEpisode(this.currentEpisode + 1);
+    }
+  }
+
+  /**
+   * Обновляет видимость кнопок навигации по эпизодам
+   */
+  private updateNavigationButtons(prevButton: HTMLElement, nextButton: HTMLElement) {
+    if (prevButton) {
+      const hasPrevious = this.currentEpisode > 1;
+      prevButton.style.display = hasPrevious ? 'flex' : 'none';
+      prevButton.style.opacity = hasPrevious ? '1' : '0.5';
+    }
+
+    if (nextButton) {
+      const hasNext = this.currentEpisode < this.episodes.length;
+      nextButton.style.display = hasNext ? 'flex' : 'none';
+      nextButton.style.opacity = hasNext ? '1' : '0.5';
+    }
+  }
+
+  /**
+   * Обновляет видимость кнопок навигации (общий метод)
+   */
+  private updateNavigationButtonsVisibility() {
+    const prevButton = this.playerContainer?.querySelector('.control-btn-prev-episode') as HTMLElement;
+    const nextButton = this.playerContainer?.querySelector('.control-btn-next-episode') as HTMLElement;
+    
+    if (prevButton && nextButton) {
+      this.updateNavigationButtons(prevButton, nextButton);
+    }
   }
 
   /**
